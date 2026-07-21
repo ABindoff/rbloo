@@ -1,0 +1,7 @@
+^analysis$
+^\.git$
+^\.github$
+^.*\.Rproj$
+^\.Rproj\.user$
+^README\.md$
+^\.gitignore$

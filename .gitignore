@@ -1,0 +1,38 @@
+# R
+.Rhistory
+.RData
+.Rproj.user/
+*.Rproj
+
+# R package build artifacts
+/*.tar.gz
+/*.Rcheck/
+/src/*.o
+/src/*.so
+/src/*.dll
+
+# LaTeX build artifacts (keep the .tex and the compiled .pdf)
+analysis/paper/*.aux
+analysis/paper/*.log
+analysis/paper/*.out
+analysis/paper/*.toc
+analysis/paper/*.bbl
+analysis/paper/*.blg
+analysis/paper/*.synctex.gz
+
+# cmdstan / rstan compiled models
+*.stan.o
+*.hpp
+/analysis/**/*.exe
+
+# OS
+.DS_Store
+Thumbs.db
+
+# tooling
+.claude/
+.Rproj.user/
+
+# internal process notes (kept locally, not published)
+analysis/HANDOFF_paper.md
+analysis/REVIEW_synthesis.md
