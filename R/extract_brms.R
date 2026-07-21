@@ -18,6 +18,37 @@
   "links (identity / logit / logit / log), with no distributional ",
   "(heteroscedastic) sub-model and no observation weights.")
 
+# Draws of the p x p random-effect covariance Sigma, in the coefficient order of
+# the (single) grouping factor's Z design, reconstructed from the fitted sd_ and
+# cor_ parameters. Handles the uncorrelated ((1+x||g)) case (no cor_ parameter).
+.rb_re_cov_draws <- function(fit, dm) {
+  rf <- fit$ranef
+  if (is.null(rf) || is.null(rf$group) || is.null(rf$coef))
+    stop("rb_loo: cannot read the random-effect structure (fit$ranef).", call.=FALSE)
+  gv    <- rf$group[[1]]
+  coefs <- rf$coef[rf$group == gv]                      # in Z_1_1..Z_1_p order
+  p     <- length(coefs)
+  cn    <- colnames(dm)
+  sdn   <- paste0("sd_", gv, "__", coefs)
+  if (!all(sdn %in% cn))
+    stop("rb_loo: could not match RE SD parameters (missing: ",
+         paste(setdiff(sdn, cn), collapse=", "), ").", call.=FALSE)
+  SD  <- as.matrix(dm[, sdn, drop=FALSE])               # S x p
+  S   <- nrow(SD)
+  Sig <- array(0, dim=c(S, p, p))
+  for (a in seq_len(p)) Sig[, a, a] <- SD[, a]^2
+  if (p > 1) for (a in 1:(p-1)) for (b in (a+1):p) {
+    c1 <- paste0("cor_", gv, "__", coefs[a], "__", coefs[b])
+    c2 <- paste0("cor_", gv, "__", coefs[b], "__", coefs[a])
+    rho <- if (c1 %in% cn) as.numeric(dm[, c1])
+           else if (c2 %in% cn) as.numeric(dm[, c2])
+           else rep(0, S)                               # uncorrelated (1+x||g)
+    cab <- rho * SD[, a] * SD[, b]
+    Sig[, a, b] <- cab; Sig[, b, a] <- cab
+  }
+  Sig
+}
+
 #' @export
 rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...) {
   .rb_validate_args(base_cut, n_quad, quad_range)
@@ -69,18 +100,6 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
     return(fb(paste0(length(gf), " grouping factors -- crossed/nested/multiple ",
                      "grouping (e.g. (1|g1)+(1|g2) or (1|g1/g2)) is out of scope")))
 
-  ## ---- that factor must carry a single random-INTERCEPT coordinate ----
-  # M_1 is the number of RE coordinates on the (only) grouping factor.
-  if (is.null(sdat$M_1) || sdat$M_1 != 1L)
-    return(fb(paste0("random slopes / correlated REs (", sdat$M_1,
-                     " RE coordinates on the grouping factor, e.g. (1+x|g))")))
-  # Z_1_1 is the RE design vector; an intercept is all-ones. A slope-only term
-  # (0+x|g) also has M_1 == 1 but Z_1_1 == x, so this is the guard that stops
-  # it being silently mis-handled as an intercept.
-  if (is.null(sdat$Z_1_1) || !isTRUE(all(sdat$Z_1_1 == 1)))
-    return(fb(paste0("a non-intercept random effect (RE design column is not ",
-                     "all 1s, e.g. a random slope like (0+x|g))")))
-
   ## ---- smooth / spline terms (extra latent Gaussian structure) ----
   if (any(grepl("^Zs_", nm)))
     return(fb("smooth / spline terms (s(), t2(), ...)"))
@@ -112,39 +131,69 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
     stop("rb_loo: internal alignment error (Y and J_1 differ in length).",
          call.=FALSE)
 
-  ## ---- draws: RE sd (exactly one) and, for gaussian, residual sd ----
+  ## ---- shared draws + predictors ----
   dm   <- posterior::as_draws_matrix(fit)
   vars <- posterior::variables(dm)
-  sd_v <- grep("^sd_.*__Intercept$", vars, value=TRUE)
-  if (length(sd_v) != 1L)
-    stop("rb_loo: expected exactly one 'sd_<group>__Intercept' parameter, ",
-         "found ", length(sd_v), " (", paste(sd_v, collapse=", "), "). ",
-         "Cannot identify the random-intercept SD unambiguously.", call.=FALSE)
-  sigu  <- as.numeric(dm[, sd_v])
-  sigma <- NULL
-  if (fam == "gaussian") {
-    if (!("sigma" %in% vars))
-      stop("rb_loo: gaussian fit has no scalar 'sigma' draw.", call.=FALSE)
-    sigma <- as.numeric(dm[, "sigma"])
-  }
-
   etaF <- brms::posterior_linpred(fit, re.form = NA)   # S x N, link scale (incl offset)
   Lf   <- brms::log_lik(fit)                           # S x N conditional
   if (!all(dim(etaF) == dim(Lf)))
     stop("rb_loo: internal error, posterior_linpred and log_lik disagree in ",
          "shape.", call.=FALSE)
 
+  ## =====================================================================
+  ## GAUSSIAN: exact for ANY RE design -- random intercept and/or slopes,
+  ## correlated or not. The conditional is exactly Gaussian, so RB-LOO is the
+  ## closed-form p x p matrix downdate (no quadrature, no approximation).
+  ## =====================================================================
+  if (fam == "gaussian") {
+    if (!("sigma" %in% vars))
+      stop("rb_loo: gaussian fit has no scalar 'sigma' draw.", call.=FALSE)
+    sigma <- as.numeric(dm[, "sigma"])
+    p  <- as.integer(sdat$M_1)
+    Zc <- lapply(seq_len(p), function(k) sdat[[paste0("Z_1_", k)]])
+    if (any(vapply(Zc, is.null, logical(1))))
+      return(fb("a random-effect design that could not be read from standata"))
+    Z   <- do.call(cbind, Zc)                          # N x p
+    Sig <- .rb_re_cov_draws(fit, dm)                   # S x p x p
+    return(.rb_engine_gaussian_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z,
+                                  Sig=Sig, sigma=sigma, base_cut=base_cut))
+  }
+
+  ## =====================================================================
+  ## NON-GAUSSIAN: a single random INTERCEPT only. The multivariate GLMM case
+  ## (random slopes on a non-Gaussian family) needs low-dimensional quadrature
+  ## over the true non-Gaussian conditional and is not yet implemented, so it
+  ## warns + falls back rather than approximating.
+  ## =====================================================================
+  if (is.null(sdat$M_1) || sdat$M_1 != 1L)
+    return(fb(paste0("random slopes / correlated REs (", sdat$M_1,
+                     " RE coordinates) on a non-Gaussian family -- only the ",
+                     "Gaussian case is exact/closed-form; the multivariate GLMM ",
+                     "quadrature is not yet implemented")))
+  # Z_1_1 is the RE design vector; an intercept is all-ones. A slope-only term
+  # (0+x|g) also has M_1 == 1 but Z_1_1 == x, so this guard stops it being
+  # silently mis-handled as an intercept.
+  if (is.null(sdat$Z_1_1) || !isTRUE(all(sdat$Z_1_1 == 1)))
+    return(fb(paste0("a non-intercept random effect ((0+x|g)) on a non-Gaussian ",
+                     "family")))
+
+  sd_v <- grep("^sd_.*__Intercept$", vars, value=TRUE)
+  if (length(sd_v) != 1L)
+    stop("rb_loo: expected exactly one 'sd_<group>__Intercept' parameter, ",
+         "found ", length(sd_v), " (", paste(sd_v, collapse=", "), "). ",
+         "Cannot identify the random-intercept SD unambiguously.", call.=FALSE)
+  sigu <- as.numeric(dm[, sd_v])
+
   # a-priori Fisher weight per obs (posterior-mean scale)
   epred <- brms::posterior_epred(fit)                  # S x N, mean scale
   ebar  <- colMeans(epred)
   mubar <- switch(fam,
-    gaussian = NULL,
     poisson  = ebar,                                   # var = mean
     bernoulli= ebar * (1 - ebar),                      # p(1-p)
-    binomial = { p <- ebar / trials; trials * p * (1 - p) })
+    binomial = { pb <- ebar / trials; trials * pb * (1 - pb) })
 
   .rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu, family=fam,
-             sigma=sigma, trials=trials, mubar=mubar,
+             sigma=NULL, trials=trials, mubar=mubar,
              base_cut=base_cut, n_quad=n_quad, quad_range=quad_range)
 }
 

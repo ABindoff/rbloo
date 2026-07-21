@@ -4,14 +4,20 @@
 # rb_loo(fit) returns, per observation, an a-priori pooling-factor / structural
 # leverage triage (Gelman-Pardoe / fibr), the RB-LOO pointwise elpd with its
 # base Pareto-k diagnostic, and a refit flag for the residual folds. RB-LOO
-# marginalises the random-effect block analytically (Gaussian: rank-1 downdate)
-# or by cheap 1-D quadrature (Bernoulli/Binomial/Poisson) and importance-samples
-# only the base, so the fiber-driven PSIS-LOO failures disappear at zero refit
-# cost. See Bindoff (2026, fibr) for the pooling factor / structural leverage,
-# and Vehtari, Gelman & Gabry (2017) for PSIS-LOO and the k-hat diagnostic.
+# marginalises the random-effect block and importance-samples only the base, so
+# the fiber-driven PSIS-LOO failures disappear at zero refit cost. See Bindoff
+# (2026, fibr) for the pooling factor / structural leverage, and Vehtari, Gelman
+# & Gabry (2017) for PSIS-LOO and the k-hat diagnostic.
 #
-# Scope: a single grouping factor with a random intercept, families
-# gaussian / bernoulli / binomial / poisson.
+# Scope, by family, on a single grouping factor:
+#   * gaussian  -- ANY random-effect design (intercept and/or slopes, correlated
+#                  or not). The conditional is exactly Gaussian, so RB-LOO is the
+#                  closed-form p x p matrix downdate (.rb_engine_gaussian_mv):
+#                  EXACT, no approximation.
+#   * bernoulli / binomial / poisson -- a single random INTERCEPT, via cheap 1-D
+#                  quadrature over the RE (.rb_engine): numerically exact to grid
+#                  resolution. Random slopes on these families need multivariate
+#                  quadrature (not yet implemented) and warn + fall back to PSIS.
 # =====================================================================
 
 #' Rao-Blackwellised LOO
@@ -165,6 +171,90 @@ rb_loo.default <- function(fit, ...)
     estimates           = c(elpd_rb=sum(e_rb), elpd_full=sum(e_full)),
     loo_rb=lr, loo_full=lf,
     meta = list(family=family, N=N, G=G, base_cut=base_cut)
+  ), class="rb_loo")
+}
+
+# =====================================================================
+# Exact multivariate Gaussian RB-LOO.
+#
+# For a group with a p-vector of random effects u_j ~ N(0, Sigma) and RE design
+# Z_j (n_j x p), the full conditional given hypers is exactly Gaussian:
+#     Lambda_j = Sigma^{-1} + Z_j' Z_j / sigma^2      (p x p posterior precision)
+#     V_j      = Lambda_j^{-1},   m_j = V_j Z_j' r_j / sigma^2
+# Leaving out observation i downdates by rank one (Sherman-Morrison):
+#     Lambda_j^{-i} = Lambda_j - z_i z_i' / sigma^2,  b_j^{-i} = b_j - z_i r_i/sigma^2
+# and the leave-i-out predictive is exactly
+#     y_i ~ N( eta_i + z_i' m_j^{-i},  sigma^2 + z_i' V_j^{-i} z_i ).
+# No quadrature, no linearisation: this is exact for correlated random effects
+# (random intercept + slopes). The scalar random-intercept downdate in
+# .rb_engine is the p = 1 special case.
+#
+# Arrays: Z (N x p) RE design; Sig (S x p x p) draws of the RE covariance;
+# sigma (S) residual SD; etaF (S x N) fixed predictor; Lf (S x N) conditional
+# log-lik for the PSIS comparison. Cost is O(S * G) small p x p solves plus
+# O(S * N) rank-1 updates.
+# =====================================================================
+.rb_engine_gaussian_mv <- function(Lf, y, gidx, etaF, Z, Sig, sigma, base_cut=0.7) {
+  S <- nrow(etaF); N <- ncol(etaF); p <- ncol(Z); G <- max(gidx)
+  loo_of <- function(L) {
+    reff <- tryCatch(loo::relative_eff(exp(L), chain_id=rep(1L,S)),
+                     error=function(e) rep(1,N))
+    suppressWarnings(loo::loo(L, r_eff=reff))
+  }
+  grp_idx <- split(seq_len(N), gidx)
+
+  ## ---- RB-LOO: exact matrix downdate per group and draw ----
+  Lrb <- matrix(0, S, N)
+  for (j in seq_len(G)) {
+    idx <- grp_idx[[j]]; if (is.null(idx)) next
+    Zj  <- Z[idx, , drop=FALSE]; nj <- length(idx); ZtZ <- crossprod(Zj)
+    for (s in seq_len(S)) {
+      s2   <- sigma[s]^2
+      Vinv <- solve(Sig[s, , ]) + ZtZ / s2          # Lambda_j
+      V    <- solve(Vinv)                            # V_j (p x p)
+      r    <- y[idx] - etaF[s, idx]                  # residuals (n_j)
+      b    <- crossprod(Zj, r) / s2                  # Z_j' r_j / s2  (p)
+      for (ii in seq_len(nj)) {
+        zi    <- Zj[ii, ]
+        Vz    <- as.numeric(V %*% zi)
+        denom <- 1 - sum(zi * Vz) / s2               # > 0 always (see notes)
+        Vmi   <- V + tcrossprod(Vz) / (s2 * denom)   # V_j^{-i} (Sherman-Morrison)
+        mmi   <- as.numeric(Vmi %*% (b - zi * (r[ii] / s2)))
+        pm    <- etaF[s, idx[ii]] + sum(zi * mmi)
+        pv    <- s2 + sum(zi * (Vmi %*% zi))
+        Lrb[s, idx[ii]] <- dnorm(y[idx[ii]], pm, sqrt(pv), log=TRUE)
+      }
+    }
+  }
+
+  lf <- loo_of(Lf); lr <- loo_of(Lrb)
+  k_full <- lf$diagnostics$pareto_k; e_full <- lf$pointwise[,"elpd_loo"]
+  k_base <- lr$diagnostics$pareto_k; e_rb   <- lr$pointwise[,"elpd_loo"]
+
+  ## ---- a-priori generalized leverage + pooling (posterior mean) ----
+  # h_i = z_i' V_j z_i / sigma^2  (generalized hat value; reduces to the scalar
+  # structural leverage when p = 1). pi_j = tr(Sigma^{-1} V_j)/p in (0,1],
+  # the multivariate Gelman-Pardoe pooling factor (1 = fully pooled).
+  Sbar <- apply(Sig, c(2, 3), mean); s2b <- mean(sigma)^2
+  SbarInv <- solve(Sbar)
+  h_struct <- numeric(N); pi_grp <- numeric(G)
+  for (j in seq_len(G)) {
+    idx <- grp_idx[[j]]; if (is.null(idx)) next
+    Zj  <- Z[idx, , drop=FALSE]
+    Vb  <- solve(SbarInv + crossprod(Zj) / s2b)
+    for (ii in seq_along(idx)) h_struct[idx[ii]] <- sum(Zj[ii,] * (Vb %*% Zj[ii,])) / s2b
+    pi_grp[j] <- sum(diag(SbarInv %*% Vb)) / p
+  }
+
+  structure(list(
+    pooling_factor      = pi_grp[gidx],
+    structural_leverage = h_struct,
+    pointwise           = data.frame(elpd_rb=e_rb, elpd_full=e_full),
+    diagnostics         = list(pareto_k=k_base, pareto_k_full=k_full),
+    refit_flag          = (k_base > base_cut),
+    estimates           = c(elpd_rb=sum(e_rb), elpd_full=sum(e_full)),
+    loo_rb=lr, loo_full=lf,
+    meta = list(family="gaussian", N=N, G=G, base_cut=base_cut, p_re=p)
   ), class="rb_loo")
 }
 

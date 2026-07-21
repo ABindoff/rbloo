@@ -61,19 +61,29 @@ refits / `reloo` using the same target (Merkle, Furr & Rabe-Hesketh 2019). RB is
 
 ## Supported models
 
-RB-LOO applies to a fit with **one grouping factor carrying a single random
-intercept**, in the families `gaussian`, `bernoulli`, `binomial`, `poisson`, with
-the default link. Anything outside this scope is **not** Rao-Blackwellised —
-`rb_loo()` never returns a wrong RB number. Instead it emits a **loud warning**
-naming the reason and **falls back to plain PSIS-LOO** (`brms::loo()`), returning
-an `rb_loo` object that is unmistakably marked as a PSIS-only result: the
-RB-specific fields (`pooling_factor`, `structural_leverage`, `pointwise$elpd_rb`,
-`diagnostics$pareto_k`) are all `NA`, only the PSIS/full fields are populated, and
-`print()` leads with a `PSIS-LOO fallback (RB-LOO not applied)` banner plus the
-Pareto-k count and advice. The out-of-scope cases that trigger this are:
+RB-LOO applies to a fit with **one grouping factor**, on the default link, in the
+families `gaussian`, `bernoulli`, `binomial`, `poisson`. The random-effect
+structure it handles depends on the family:
+
+- **`gaussian`: any random-effect design** — random intercept, random slopes,
+  correlated or not (`(1|g)`, `(1+x|g)`, `(0+x|g)`, `(x1+x2|g)`). The conditional
+  is exactly Gaussian, so RB-LOO is the closed-form `p × p` matrix downdate and
+  is **exact** (validated fold-by-fold against brute-force refits).
+- **`bernoulli` / `binomial` / `poisson`: a single random intercept**, via 1-D
+  quadrature (numerically exact to grid resolution).
+
+Anything outside this scope is **not** Rao-Blackwellised — `rb_loo()` never
+returns a wrong RB number. Instead it emits a **loud warning** naming the reason
+and **falls back to plain PSIS-LOO** (`brms::loo()`), returning an `rb_loo` object
+unmistakably marked as PSIS-only: the RB-specific fields (`pooling_factor`,
+`structural_leverage`, `pointwise$elpd_rb`, `diagnostics$pareto_k`) are all `NA`,
+only the PSIS/full fields are populated, and `print()` leads with a
+`PSIS-LOO fallback (RB-LOO not applied)` banner plus the Pareto-k count and advice.
+The out-of-scope cases that trigger this are:
 
 - multiple / crossed / nested grouping factors (`(1|g1)+(1|g2)`, `(1|g1/g2)`);
-- random slopes or non-intercept random effects (`(1+x|g)`, `(0+x|g)`);
+- **random slopes on a non-Gaussian family** (multivariate GLMM quadrature is not
+  yet implemented — the Gaussian case above is exact);
 - unsupported families (e.g. `negbinomial`, `Gamma`, `student`, ordinal,
   zero-inflated / hurdle);
 - distributional / heteroscedastic models (where `sigma` or another parameter is

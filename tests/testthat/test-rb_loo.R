@@ -117,13 +117,16 @@ test_that("out-of-scope brms fits warn and return a PSIS-LOO fallback", {
   expect_warning(rb_a <- rb_loo(fit_a), "does not apply.*grouping factors")
   expect_psis_fallback(rb_a, "grouping factors")
 
-  # (b) random slope, correlated RE: M_1 == 2
-  fit_b <- ctrl(y ~ x + (1 + x | g1))
+  # (b) random slope on a NON-Gaussian family (multivariate GLMM not yet
+  # implemented). Gaussian slopes are exact and handled -- see the separate test.
+  d$yc <- rpois(80, 3)
+  fit_b <- ctrl(yc ~ x + (1 + x | g1), family = brms::brmsfamily("poisson"))
   expect_warning(rb_b <- rb_loo(fit_b), "random slopes|RE coordinates")
   expect_psis_fallback(rb_b, "random slopes|RE coordinates")
 
-  # (b') slope-only (0 + x | g): M_1 == 1 trap, caught by the all-ones check
-  fit_c <- ctrl(y ~ x + (0 + x | g1))
+  # (b') slope-only (0 + x | g) on a non-Gaussian family: the M_1 == 1 trap,
+  # caught by the all-ones check.
+  fit_c <- ctrl(yc ~ x + (0 + x | g1), family = brms::brmsfamily("poisson"))
   expect_warning(rb_c <- rb_loo(fit_c), "non-intercept random effect")
   expect_psis_fallback(rb_c, "non-intercept random effect")
 
@@ -143,6 +146,41 @@ test_that("out-of-scope brms fits warn and return a PSIS-LOO fallback", {
 
   # the fallback object prints its PSIS-only banner, not a fake RB result
   expect_output(print(rb_a), "PSIS-LOO fallback")
+})
+
+# --- Gaussian correlated REs run the exact multivariate matrix engine -------
+test_that("gaussian random slopes are handled exactly (not a fallback)", {
+  skip_on_cran()
+  skip_if_not_installed("brms")
+  set.seed(5)
+  g <- factor(rep(1:20, each = 3)); n <- length(g); x <- rnorm(n)
+  gi <- as.integer(g)
+  a <- rnorm(20, 0, 1.2); b <- rnorm(20, 0, 1.0)   # real random intercept + slope
+  d <- data.frame(y = a[gi] + (0.5 + b[gi]) * x + rnorm(n, 0, 0.6), x = x, g = g)
+
+  # (1 + x | g): correlated random intercept + slope, p = 2
+  fit2 <- brms::brm(y ~ x + (1 + x | g), data = d, family = brms::brmsfamily("gaussian"),
+                    chains = 1, iter = 500, warmup = 250, refresh = 0, seed = 1,
+                    save_pars = brms::save_pars(all = TRUE))
+  rb2 <- rb_loo(fit2)
+  expect_null(rb2$meta$fallback)                 # exact engine, NOT a fallback
+  expect_identical(rb2$meta$p_re, 2L)
+  expect_true(all(is.finite(rb2$pointwise$elpd_rb)))
+  expect_length(rb2$structural_leverage, n)
+  expect_true(all(is.finite(rb2$pooling_factor)) &&
+              all(rb2$pooling_factor > 0 & rb2$pooling_factor <= 1))
+  # RB removes fiber-driven failures; it never creates more than PSIS has
+  kf <- rb2$diagnostics$pareto_k_full; kb <- rb2$diagnostics$pareto_k
+  expect_lte(sum(kb > 0.7), sum(kf > 0.7))
+
+  # (0 + x | g): slope-only, exact for gaussian (p = 1, general Z)
+  fit1 <- brms::brm(y ~ x + (0 + x | g), data = d, family = brms::brmsfamily("gaussian"),
+                    chains = 1, iter = 500, warmup = 250, refresh = 0, seed = 1,
+                    save_pars = brms::save_pars(all = TRUE))
+  rb1 <- rb_loo(fit1)
+  expect_null(rb1$meta$fallback)
+  expect_identical(rb1$meta$p_re, 1L)
+  expect_true(all(is.finite(rb1$pointwise$elpd_rb)))
 })
 
 # --- offsets are carried through re.form = NA ------------------------------
