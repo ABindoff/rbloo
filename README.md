@@ -69,8 +69,12 @@ structure it handles depends on the family:
   correlated or not (`(1|g)`, `(1+x|g)`, `(0+x|g)`, `(x1+x2|g)`). The conditional
   is exactly Gaussian, so RB-LOO is the closed-form `p × p` matrix downdate and
   is **exact** (validated fold-by-fold against brute-force refits).
-- **`bernoulli` / `binomial` / `poisson`: a single random intercept**, via 1-D
-  quadrature (numerically exact to grid resolution).
+- **`bernoulli` / `binomial` / `poisson`: random effects of dimension `p ≤ 3`** —
+  intercept and/or slopes, correlated or not. A single intercept uses fast 1-D
+  quadrature; higher-dimensional or non-intercept REs use a `p`-dimensional
+  tensor-grid quadrature over the true conditional. Both are numerically exact to
+  grid resolution (validated against brute-force refits: RB-LOO RMSE ≈ 0.03 nats
+  vs the exact refit, against ≈ 0.5 for PSIS-LOO).
 
 Anything outside this scope is **not** Rao-Blackwellised — `rb_loo()` never
 returns a wrong RB number. Instead it emits a **loud warning** naming the reason
@@ -82,8 +86,8 @@ only the PSIS/full fields are populated, and `print()` leads with a
 The out-of-scope cases that trigger this are:
 
 - multiple / crossed / nested grouping factors (`(1|g1)+(1|g2)`, `(1|g1/g2)`);
-- **random slopes on a non-Gaussian family** (multivariate GLMM quadrature is not
-  yet implemented — the Gaussian case above is exact);
+- random effects of dimension `p > 3` on a non-Gaussian family (the tensor grid
+  would be too large);
 - unsupported families (e.g. `negbinomial`, `Gamma`, `student`, ordinal,
   zero-inflated / hurdle);
 - distributional / heteroscedastic models (where `sigma` or another parameter is

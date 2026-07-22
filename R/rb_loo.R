@@ -14,10 +14,12 @@
 #                  or not). The conditional is exactly Gaussian, so RB-LOO is the
 #                  closed-form p x p matrix downdate (.rb_engine_gaussian_mv):
 #                  EXACT, no approximation.
-#   * bernoulli / binomial / poisson -- a single random INTERCEPT, via cheap 1-D
-#                  quadrature over the RE (.rb_engine): numerically exact to grid
-#                  resolution. Random slopes on these families need multivariate
-#                  quadrature (not yet implemented) and warn + fall back to PSIS.
+#   * bernoulli / binomial / poisson -- random effects of dimension p <= 3
+#                  (intercept and/or slopes, correlated or not). A single
+#                  intercept uses fast 1-D quadrature (.rb_engine); higher-dim or
+#                  non-intercept REs use a p-dimensional tensor-grid quadrature
+#                  over the true conditional (.rb_engine_glmm_mv). Both are exact
+#                  to grid resolution. p > 3 warns + falls back to PSIS.
 # =====================================================================
 
 #' Rao-Blackwellised LOO
@@ -255,6 +257,86 @@ rb_loo.default <- function(fit, ...)
     estimates           = c(elpd_rb=sum(e_rb), elpd_full=sum(e_full)),
     loo_rb=lr, loo_full=lf,
     meta = list(family="gaussian", N=N, G=G, base_cut=base_cut, p_re=p)
+  ), class="rb_loo")
+}
+
+# =====================================================================
+# Multivariate GLMM RB-LOO by low-dimensional quadrature.
+#
+# For a group with a p-vector of random effects u_j ~ N(0, Sigma), RE design
+# Z_j, and a non-Gaussian likelihood, the leave-i-out predictive
+#   p(y_i | y_{j\i}, phi) = INT p(y_i | eta_i + z_i' u) p(u | y_{j\i}, phi) du
+# has no closed form. We evaluate it by a self-normalised tensor-grid quadrature
+# over the RE prior (the multivariate generalisation of the scalar quadrature in
+# .rb_engine): standardised nodes z_k on a grid, whitened per draw by u = chol(Sigma) z,
+# with the prior N(z|0,I) folded into the weights and the other-group-members'
+# likelihood self-normalising the leave-i-out posterior. Exact to grid resolution;
+# accurate in the regime RB-LOO targets (small, weakly-identified groups, where the
+# conditional is broad). Cost is O(S * N * K), K = nodes^p, so we cap at p <= 3.
+# =====================================================================
+.rb_engine_glmm_mv <- function(Lf, y, gidx, etaF, Z, Sig, family, trials=NULL,
+                               mubar_W=NULL, base_cut=0.7, quad_range=6) {
+  S <- nrow(etaF); N <- ncol(etaF); p <- ncol(Z); G <- max(gidx)
+  m  <- switch(as.character(p), "1"=64L, "2"=25L, "3"=11L, 9L)   # nodes per dim
+  Zgrid <- as.matrix(expand.grid(rep(list(seq(-quad_range, quad_range, length.out=m)), p)))
+  K   <- nrow(Zgrid); tZg <- t(Zgrid)                    # p x K
+  lp0 <- -0.5 * rowSums(Zgrid^2)                          # K: log N(z|0,I) up to const
+  loo_of <- function(L) {
+    reff <- tryCatch(loo::relative_eff(exp(L), chain_id=rep(1L,S)),
+                     error=function(e) rep(1,N))
+    suppressWarnings(loo::loo(L, r_eff=reff))
+  }
+  grp_idx <- split(seq_len(N), gidx)
+
+  Lrb <- matrix(0, S, N)
+  for (j in seq_len(G)) {
+    idx <- grp_idx[[j]]; if (is.null(idx)) next
+    Zj  <- Z[idx, , drop=FALSE]; nj <- length(idx); yj <- y[idx]
+    tr  <- if (!is.null(trials)) trials[idx] else NULL
+    for (s in seq_len(S)) {
+      U   <- t(chol(Sig[s, , ])) %*% tZg                 # p x K : u = chol(Sigma) z
+      lin <- etaF[s, idx] + Zj %*% U                      # nj x K linear predictors
+      ll  <- matrix(0, nj, K)
+      for (o in seq_len(nj))
+        ll[o, ] <- .llk(yj[o], lin[o, ], family, if (!is.null(tr)) tr[o] else NULL)
+      csum <- colSums(ll)                                 # all-obs log-lik per node
+      for (ii in seq_len(nj)) {
+        lw <- lp0 + (csum - ll[ii, ])                     # leave-ii-out log-weight
+        mx <- max(lw)
+        if (!is.finite(mx)) { Lrb[s, idx[ii]] <- -690.776; next }
+        w  <- exp(lw - mx); sw <- sum(w)
+        if (!is.finite(sw) || sw <= 0) { Lrb[s, idx[ii]] <- -690.776; next }
+        pred <- sum((w / sw) * exp(ll[ii, ]))
+        Lrb[s, idx[ii]] <- log(max(pred, 1e-300))
+      }
+    }
+  }
+
+  lf <- loo_of(Lf); lr <- loo_of(Lrb)
+  k_full <- lf$diagnostics$pareto_k; e_full <- lf$pointwise[,"elpd_loo"]
+  k_base <- lr$diagnostics$pareto_k; e_rb   <- lr$pointwise[,"elpd_loo"]
+
+  ## ---- a-priori generalized leverage + pooling (Fisher weights, posterior mean) ----
+  Sbar <- apply(Sig, c(2,3), mean); SbarInv <- solve(Sbar)
+  h_struct <- numeric(N); pi_grp <- numeric(G)
+  for (j in seq_len(G)) {
+    idx <- grp_idx[[j]]; if (is.null(idx)) next
+    Zj  <- Z[idx, , drop=FALSE]; Wj <- mubar_W[idx]
+    Vb  <- solve(SbarInv + crossprod(Zj * sqrt(Wj)))      # (Sigma^-1 + Z'WZ)^-1
+    for (ii in seq_along(idx))
+      h_struct[idx[ii]] <- Wj[ii] * sum(Zj[ii,] * (Vb %*% Zj[ii,]))
+    pi_grp[j] <- sum(diag(SbarInv %*% Vb)) / p
+  }
+
+  structure(list(
+    pooling_factor      = pi_grp[gidx],
+    structural_leverage = h_struct,
+    pointwise           = data.frame(elpd_rb=e_rb, elpd_full=e_full),
+    diagnostics         = list(pareto_k=k_base, pareto_k_full=k_full),
+    refit_flag          = (k_base > base_cut),
+    estimates           = c(elpd_rb=sum(e_rb), elpd_full=sum(e_full)),
+    loo_rb=lr, loo_full=lf,
+    meta = list(family=family, N=N, G=G, base_cut=base_cut, p_re=p)
   ), class="rb_loo")
 }
 

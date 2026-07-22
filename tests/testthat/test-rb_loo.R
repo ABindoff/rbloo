@@ -117,18 +117,8 @@ test_that("out-of-scope brms fits warn and return a PSIS-LOO fallback", {
   expect_warning(rb_a <- rb_loo(fit_a), "does not apply.*grouping factors")
   expect_psis_fallback(rb_a, "grouping factors")
 
-  # (b) random slope on a NON-Gaussian family (multivariate GLMM not yet
-  # implemented). Gaussian slopes are exact and handled -- see the separate test.
-  d$yc <- rpois(80, 3)
-  fit_b <- ctrl(yc ~ x + (1 + x | g1), family = brms::brmsfamily("poisson"))
-  expect_warning(rb_b <- rb_loo(fit_b), "random slopes|RE coordinates")
-  expect_psis_fallback(rb_b, "random slopes|RE coordinates")
-
-  # (b') slope-only (0 + x | g) on a non-Gaussian family: the M_1 == 1 trap,
-  # caught by the all-ones check.
-  fit_c <- ctrl(yc ~ x + (0 + x | g1), family = brms::brmsfamily("poisson"))
-  expect_warning(rb_c <- rb_loo(fit_c), "non-intercept random effect")
-  expect_psis_fallback(rb_c, "non-intercept random effect")
+  # (Gaussian and non-Gaussian random slopes are HANDLED -- see the separate
+  # exact-matrix and multivariate-quadrature tests below.)
 
   # (c) unsupported family
   dnb <- data.frame(y = rpois(80, 3), x = rnorm(80), g1 = factor(rep(1:16, 5)))
@@ -181,6 +171,30 @@ test_that("gaussian random slopes are handled exactly (not a fallback)", {
   expect_null(rb1$meta$fallback)
   expect_identical(rb1$meta$p_re, 1L)
   expect_true(all(is.finite(rb1$pointwise$elpd_rb)))
+})
+
+# --- non-Gaussian random slopes run the multivariate quadrature engine ------
+test_that("poisson random slopes run the multivariate GLMM quadrature", {
+  skip_on_cran()
+  skip_if_not_installed("brms")
+  set.seed(7)
+  J <- 24; nj <- sample(c(2, 3), J, replace = TRUE); g <- rep(1:J, nj)
+  n <- length(g); x <- rnorm(n); gi <- g
+  a <- rnorm(J, 0, 1.0); b <- rnorm(J, 0, 0.8)
+  y <- rpois(n, exp(-0.3 + a[gi] + (0.4 + b[gi]) * x))
+  d <- data.frame(y = y, x = x, g = factor(g))
+
+  fit <- brms::brm(y ~ x + (1 + x | g), data = d, family = brms::brmsfamily("poisson"),
+                   chains = 1, iter = 500, warmup = 250, refresh = 0, seed = 1,
+                   save_pars = brms::save_pars(all = TRUE))
+  rb <- rb_loo(fit)
+  expect_null(rb$meta$fallback)                  # quadrature engine, NOT a fallback
+  expect_identical(rb$meta$p_re, 2L)
+  expect_true(all(is.finite(rb$pointwise$elpd_rb)))
+  expect_length(rb$structural_leverage, n)
+  expect_true(all(is.finite(rb$pooling_factor)))
+  kf <- rb$diagnostics$pareto_k_full; kb <- rb$diagnostics$pareto_k
+  expect_lte(sum(kb > 0.7), sum(kf > 0.7))       # RB never adds failures
 })
 
 # --- offsets are carried through re.form = NA ------------------------------

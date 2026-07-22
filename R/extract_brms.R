@@ -160,41 +160,46 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
   }
 
   ## =====================================================================
-  ## NON-GAUSSIAN: a single random INTERCEPT only. The multivariate GLMM case
-  ## (random slopes on a non-Gaussian family) needs low-dimensional quadrature
-  ## over the true non-Gaussian conditional and is not yet implemented, so it
-  ## warns + falls back rather than approximating.
+  ## NON-GAUSSIAN. A single random INTERCEPT uses the fast 1-D quadrature; a
+  ## non-intercept or multivariate RE (p in {1,2,3}) uses the p-dimensional
+  ## quadrature over the true non-Gaussian conditional. p > 3 falls back (the
+  ## tensor grid becomes too large).
   ## =====================================================================
-  if (is.null(sdat$M_1) || sdat$M_1 != 1L)
-    return(fb(paste0("random slopes / correlated REs (", sdat$M_1,
-                     " RE coordinates) on a non-Gaussian family -- only the ",
-                     "Gaussian case is exact/closed-form; the multivariate GLMM ",
-                     "quadrature is not yet implemented")))
-  # Z_1_1 is the RE design vector; an intercept is all-ones. A slope-only term
-  # (0+x|g) also has M_1 == 1 but Z_1_1 == x, so this guard stops it being
-  # silently mis-handled as an intercept.
-  if (is.null(sdat$Z_1_1) || !isTRUE(all(sdat$Z_1_1 == 1)))
-    return(fb(paste0("a non-intercept random effect ((0+x|g)) on a non-Gaussian ",
-                     "family")))
+  p <- as.integer(sdat$M_1)
 
-  sd_v <- grep("^sd_.*__Intercept$", vars, value=TRUE)
-  if (length(sd_v) != 1L)
-    stop("rb_loo: expected exactly one 'sd_<group>__Intercept' parameter, ",
-         "found ", length(sd_v), " (", paste(sd_v, collapse=", "), "). ",
-         "Cannot identify the random-intercept SD unambiguously.", call.=FALSE)
-  sigu <- as.numeric(dm[, sd_v])
-
-  # a-priori Fisher weight per obs (posterior-mean scale)
-  epred <- brms::posterior_epred(fit)                  # S x N, mean scale
-  ebar  <- colMeans(epred)
+  # a-priori Fisher weight per obs (posterior-mean scale), used by both paths
+  ebar  <- colMeans(brms::posterior_epred(fit))        # S x N -> N
   mubar <- switch(fam,
     poisson  = ebar,                                   # var = mean
     bernoulli= ebar * (1 - ebar),                      # p(1-p)
     binomial = { pb <- ebar / trials; trials * pb * (1 - pb) })
 
-  .rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu, family=fam,
-             sigma=NULL, trials=trials, mubar=mubar,
-             base_cut=base_cut, n_quad=n_quad, quad_range=quad_range)
+  ## ---- single random intercept: fast scalar 1-D quadrature ----
+  if (p == 1L && !is.null(sdat$Z_1_1) && isTRUE(all(sdat$Z_1_1 == 1))) {
+    sd_v <- grep("^sd_.*__Intercept$", vars, value=TRUE)
+    if (length(sd_v) != 1L)
+      stop("rb_loo: expected exactly one 'sd_<group>__Intercept' parameter, ",
+           "found ", length(sd_v), " (", paste(sd_v, collapse=", "), ").",
+           call.=FALSE)
+    sigu <- as.numeric(dm[, sd_v])
+    return(.rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu, family=fam,
+                      sigma=NULL, trials=trials, mubar=mubar,
+                      base_cut=base_cut, n_quad=n_quad, quad_range=quad_range))
+  }
+
+  ## ---- multivariate / non-intercept RE: p-dimensional quadrature ----
+  if (p > 3L)
+    return(fb(paste0("a ", p, "-dimensional random effect on a non-Gaussian ",
+                     "family (multivariate GLMM quadrature is capped at 3 ",
+                     "dimensions; the tensor grid would be too large)")))
+  Zc <- lapply(seq_len(p), function(k) sdat[[paste0("Z_1_", k)]])
+  if (any(vapply(Zc, is.null, logical(1))))
+    return(fb("a random-effect design that could not be read from standata"))
+  Z   <- do.call(cbind, Zc)                            # N x p
+  Sig <- .rb_re_cov_draws(fit, dm)                     # S x p x p
+  return(.rb_engine_glmm_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z, Sig=Sig,
+                            family=fam, trials=trials, mubar_W=mubar,
+                            base_cut=base_cut, quad_range=quad_range))
 }
 
 #' @export
