@@ -80,9 +80,24 @@ rb_loo.default <- function(fit, ...)
   "loo_moment_match() to correct them.")
 
 .rb_psis_fallback <- function(fit, reason, base_cut, loo_fun) {
+  # Compute PSIS-LOO first: only warn "returning plain PSIS-LOO" if we actually
+  # can. If loo() itself fails (e.g. NAs in the log-likelihood -- missing data,
+  # an mi() imputation model, or a multivariate response), report that clearly
+  # rather than emitting a misleading warning and then crashing in loo internals.
+  lf <- tryCatch(suppressWarnings(loo_fun(fit)),
+    error = function(e) stop(
+      "rb_loo: RB-LOO does not apply to ", reason,
+      ", and plain PSIS-LOO also failed on this fit:\n    ", conditionMessage(e),
+      "\n  This usually means the pointwise log-likelihood contains NAs -- ",
+      "e.g. missing data / an mi() imputation model, or a multivariate ",
+      "response. Compute LOO directly on the relevant univariate sub-model ",
+      "with loo()/reloo().", call. = FALSE))
+  if (anyNA(lf$pointwise[, "elpd_loo"]))
+    warning("rb_loo: the PSIS-LOO fallback has NA pointwise elpd for some ",
+            "observations; the fit's log-likelihood is not fully defined.",
+            call. = FALSE)
   warning("RB-LOO does not apply to ", reason, "; returning plain PSIS-LOO. ",
           .rb_advice, call.=FALSE)
-  lf <- suppressWarnings(loo_fun(fit))
   ek <- lf$pointwise[, "elpd_loo"]
   kk <- lf$diagnostics$pareto_k
   N  <- length(ek)

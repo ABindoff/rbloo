@@ -53,6 +53,21 @@ test_that("argument validation rejects nonsense and warns on high base_cut", {
   expect_true(.rb_validate_args(0.7, 64, 6))
 })
 
+# --- fallback fails CLEARLY if PSIS-LOO itself errors (fit-free) ------------
+test_that("PSIS-LOO fallback reports clearly when loo() itself fails", {
+  # e.g. an mi()/multivariate fit whose log-likelihood contains NAs: loo() errors.
+  # The fallback must not emit a misleading 'returning PSIS-LOO' warning and then
+  # crash; it must fail once, clearly.
+  boom <- function(...) stop("NAs not allowed in input.")
+  err <- tryCatch(
+    suppressWarnings(.rb_psis_fallback(fit = NULL, reason = "multivariate models",
+                                       base_cut = 0.7, loo_fun = boom)),
+    error = function(e) conditionMessage(e))
+  expect_match(err, "RB-LOO does not apply")
+  expect_match(err, "plain PSIS-LOO also failed")
+  expect_match(err, "NAs not allowed")
+})
+
 # --- numerical guard: no NaN/-Inf escapes even under underflow --------------
 test_that("quadrature guard floors underflowing folds instead of returning NaN", {
   set.seed(1); S <- 40
