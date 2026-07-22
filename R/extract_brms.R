@@ -96,7 +96,11 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
 
   ## ---- exactly one grouping factor ----
   gf <- grep("^N_[0-9]+$", nm, value=TRUE)
-  if (length(gf) != 1L || is.null(sdat$J_1))
+  if (length(gf) == 0L || is.null(sdat$J_1))
+    return(fb(paste0("a non-hierarchical model (no grouping factor / random ",
+                     "effect for RB-LOO to marginalise; plain PSIS-LOO is the ",
+                     "usual LOO here)")))
+  if (length(gf) != 1L)
     return(fb(paste0(length(gf), " grouping factors -- crossed/nested/multiple ",
                      "grouping (e.g. (1|g1)+(1|g2) or (1|g1/g2)) is out of scope")))
 

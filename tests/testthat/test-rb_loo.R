@@ -135,6 +135,11 @@ test_that("out-of-scope brms fits warn and return a PSIS-LOO fallback", {
   # (Gaussian and non-Gaussian random slopes are HANDLED -- see the separate
   # exact-matrix and multivariate-quadrature tests below.)
 
+  # (a') non-hierarchical model: no grouping factor at all
+  fit_nh <- ctrl(y ~ x)
+  expect_warning(rb_nh <- rb_loo(fit_nh), "non-hierarchical")
+  expect_psis_fallback(rb_nh, "non-hierarchical")
+
   # (c) unsupported family
   dnb <- data.frame(y = rpois(80, 3), x = rnorm(80), g1 = factor(rep(1:16, 5)))
   fit_d <- brms::brm(y ~ x + (1 | g1), data = dnb,
