@@ -686,15 +686,21 @@ which plateaus above it.}\label{fig:sscaling}
 \section{Discussion}
 % =====================================================================
 
-RB-LOO applies to a single random-intercept grouping factor with a scalar
-random-effect block: Gaussian LMMs (analytic) and Bernoulli, binomial and Poisson
-GLMMs (1-D quadrature). Its estimand is the integrated (marginal-over-RE)
-predictive, against which we compare throughout \citep{merkle2019bayesian}. Random
-slopes and correlated within-group effects are a low-dimensional extension, where
-the quadrature becomes two- or three-dimensional but stays cheap. Crossed or
-multiple grouping factors are the hard case: a deleted observation loads on several
-fibers at once and there is no single block to collapse, so the package falls back
-to plain PSIS-LOO, which we name as out of scope rather than degrade silently.
+The experiments here use a single random-intercept grouping factor: Gaussian LMMs
+(analytic) and Bernoulli, binomial and Poisson GLMMs (1-D quadrature). Its estimand
+is the integrated (marginal-over-RE) predictive, against which we compare throughout
+\citep{merkle2019bayesian}. Random slopes and correlated within-group effects extend
+the estimator \emph{exactly}, not merely approximately. In the Gaussian case the
+block conditional is Gaussian in any dimension, so the leave-one-out downdate becomes
+a $p\times p$ matrix downdate (Proposition~\ref{thm:t1}) that stays closed-form and
+exact; for GLMMs the multivariate case is a low-dimensional quadrature over the true
+conditional (feasible for $p\le3$). The \texttt{rbloo} package implements both, and
+we validate them fold-by-fold against brute-force refits (elpd RMSE $\approx0.03$
+nats vs the exact refit on a random intercept-plus-slope model, against $\approx0.5$
+for PSIS-LOO). Crossed or multiple grouping factors are the genuinely hard case: a
+deleted observation loads on several fibers at once and there is no single block to
+collapse, so the package falls back to plain PSIS-LOO, which we name as out of scope
+rather than degrade silently.
 Practically, the method is a two-line change to a hierarchical LOO workflow: triage
 on the pooling factor, integrate out the flagged folds, and refit only the residual
 few, which removes most of the refits PSIS-LOO would otherwise demand. The geometry
@@ -719,6 +725,14 @@ constant-group-size real data (both epilepsy models) its discrimination is
 fitted-mean-driven, closer to ``influential points have high $\khat$'' folklore than
 to a pure group-size claim. The group-size content is demonstrated on the
 heterogeneous-group simulations.
+\item \textbf{The prediction is specifically about the pooling / random-effect
+component of reliability.} The pooling factor predicts the LOO failures driven by a
+data-driven random effect in a small group; it says nothing about, and explains none
+of, the LOO unreliability of a single-level (non-hierarchical) model, where heavy
+importance-sampling tails arise from other causes. The claim is confined to
+hierarchical models on which the pooling factor is exact (Gaussian) or
+well-approximated; we make no claim where it is unavailable (e.g. multiple crossed
+grouping factors).
 \item \textbf{``Matches exact refit'' is estimand-shared on singleton folds}, where
 \texttt{reloo} and RB-LOO compute the same integral, so it cannot falsify RB-LOO
 there; the meaningful comparison on those folds is against PSIS-LOO and moment
