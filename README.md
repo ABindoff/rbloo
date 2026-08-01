@@ -103,6 +103,23 @@ objects remain hard errors — those are usage errors, not model-scope limitatio
 same estimator and the same warn-and-fall-back behaviour, but is not yet validated
 end-to-end; it emits a warning to that effect.
 
+### `smoothbp` fits
+
+`smoothbp_fit` objects (hierarchical piecewise regression with smoothed
+change-points, including the spike-and-slab `smoothbp_ss_fit` variant) are
+supported for a **random intercept on `b0`**, i.e. `b0 = ~ 1 + (1 | group)`.
+Conditional on a draw, the change-point mean `f(t; θ)` is just a number, so the
+leave-one-out predictive that marginalises `u_j` is the same closed-form Gaussian
+downdate used for a Gaussian GLMM: the non-linearity of the mean function enters
+only through the fixed-effect predictor, and RB-LOO is **exact** here (checked
+fold-by-fold against dense numerical marginalisation, agreement ~1e-14).
+
+Random effects on `b1`, `deltas`, `omega` or `rho` warn and fall back to
+PSIS-LOO. For `omega`/`rho` the mean is non-linear in the random effect, so no
+closed form exists; for `b1`/`deltas` the effective RE design column is itself a
+function of the draw (`τ - ω⁽ˢ⁾`), which the fixed-`Z` engines cannot represent.
+A fit with no random intercept falls back too — there is nothing to marginalise.
+
 ## References
 
 - Gelman & Pardoe (2006), *Technometrics* — the pooling factor.

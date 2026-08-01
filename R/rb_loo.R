@@ -24,7 +24,8 @@
 
 #' Rao-Blackwellised LOO
 #'
-#' @param fit a fitted model (brmsfit; stanreg via the shared extractor)
+#' @param fit a fitted model (brmsfit; stanreg and smoothbp_fit via the shared
+#'   extractors)
 #' @param base_cut Pareto-k threshold above which a fold is flagged for refit
 #' @param n_quad number of quadrature nodes for non-Gaussian families
 #' @param quad_range half-width of the standardised RE quadrature grid, in prior
@@ -39,7 +40,7 @@ rb_loo <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...)
 #' @export
 rb_loo.default <- function(fit, ...)
   stop("rb_loo: no method for class ", paste(class(fit), collapse="/"),
-       ". Supported: brmsfit, stanreg.", call.=FALSE)
+       ". Supported: brmsfit, stanreg, smoothbp_fit.", call.=FALSE)
 
 # ---------------------------------------------------------------------
 # argument validation (shared by all methods). Fails loudly and early,
@@ -387,8 +388,10 @@ print.rb_loo <- function(x, ...) {
     return(invisible(x))
   }
 
-  cat(sprintf("rb_loo  (%s GLMM; N=%s obs, G=%s groups)\n",
-              m$family, fG(m$N), fG(m$G)))
+  cat(sprintf("rb_loo  (%s; N=%s obs, G=%s groups)\n",
+              if (is.null(m$model)) paste(m$family, "GLMM")
+              else sprintf("%s, %s", m$model, m$family),
+              fG(m$N), fG(m$G)))
   cat(sprintf("  elpd_rb = %s    elpd_full(PSIS) = %s\n",
               fnum(x$estimates["elpd_rb"]), fnum(x$estimates["elpd_full"])))
   cat(sprintf("  PSIS-LOO : #(k>0.7) = %d  (max %s)\n", n_gt(kf, 0.7), fk(safemax(kf))))
