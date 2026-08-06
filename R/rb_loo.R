@@ -397,7 +397,17 @@ print.rb_loo <- function(x, ...) {
   cat(sprintf("  PSIS-LOO : #(k>0.7) = %d  (max %s)\n", n_gt(kf, 0.7), fk(safemax(kf))))
   cat(sprintf("  RB-LOO   : #(k>0.7) = %d  (max %s)   <- fiber failures removed\n",
               n_gt(kb, 0.7), fk(safemax(kb))))
-  cat(sprintf("  refit_flag: %d fold(s) still k_base>%.2f -> send to reloo\n",
-              sum(x$refit_flag, na.rm=TRUE), m$base_cut))
+  n_flag <- sum(x$refit_flag, na.rm=TRUE)
+  if (n_flag > 0L) {
+    idx   <- which(x$refit_flag)
+    shown <- paste(utils::head(idx, 8L), collapse=", ")
+    if (n_flag > 8L) shown <- paste0(shown, ", ... [", n_flag - 8L, " more]")
+    cat(sprintf("  refit_flag: %d fold(s) with RB-LOO k > %.2f (obs %s)\n",
+                n_flag, m$base_cut, shown))
+    cat("              -> refit these folds exactly with reloo() or loo_moment_match().\n")
+  } else {
+    cat(sprintf("  refit_flag: none (all RB-LOO k <= %.2f) -> no refits needed\n",
+                m$base_cut))
+  }
   invisible(x)
 }
