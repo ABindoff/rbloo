@@ -42,9 +42,16 @@ rb
 ```
 
 If any folds remain flagged after RB, `rb_loo(fit, reloo = TRUE)` refits them
-exactly (brms fits only; one Stan refit per flagged fold, via `brms::reloo()`
-on the RB diagnostics) and substitutes the exact elpd into `elpd_rb` — usually
-a handful of refits instead of the dozens PSIS-LOO alone would flag.
+exactly — one refit per flagged fold, via `brms::reloo()` for brms fits or
+`update()` for smoothbp fits — and substitutes the exact elpd into `elpd_rb`.
+Usually that is a handful of refits instead of the dozens PSIS-LOO alone would
+flag.
+
+Compare models on their RB elpd with `loo_compare(rb1, rb2)` — the familiar
+`loo` output, computed on the marginal predictive, with guardrails: it refuses
+to compare an RB result against a plain (conditional) PSIS-LOO or against a
+fallback, and warns when residual flagged folds could be carrying the
+difference.
 
 The returned object carries, per observation:
 
