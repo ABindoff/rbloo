@@ -50,10 +50,23 @@
 }
 
 #' @export
-rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...) {
-  .rb_validate_args(base_cut, n_quad, quad_range)
-  fb <- function(reason)
+rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
+                           reloo = FALSE, ...) {
+  .rb_validate_args(base_cut, n_quad, quad_range, reloo)
+  fb <- function(reason) {
+    if (isTRUE(reloo))
+      warning("rb_loo: reloo = TRUE ignored -- RB-LOO was not applied (PSIS ",
+              "fallback); to refit high-k folds of the plain PSIS-LOO, call ",
+              "brms::reloo(fit) directly.", call. = FALSE)
     .rb_psis_fallback(fit, reason, base_cut, loo_fun = brms::loo)
+  }
+  # applied to every real RB result (not the fallbacks): stamp the reloo
+  # capability for print(), and run the exact refits if asked to
+  finish <- function(out) {
+    out$meta$can_reloo <- TRUE
+    if (isTRUE(reloo)) out <- .rb_reloo_brms(out, fit, base_cut)
+    out
+  }
 
   ## ---- multivariate / mixture / non-linear formulas ----
   if (!inherits(fit$formula, "brmsformula"))
@@ -159,8 +172,8 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
       return(fb("a random-effect design that could not be read from standata"))
     Z   <- do.call(cbind, Zc)                          # N x p
     Sig <- .rb_re_cov_draws(fit, dm)                   # S x p x p
-    return(.rb_engine_gaussian_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z,
-                                  Sig=Sig, sigma=sigma, base_cut=base_cut))
+    return(finish(.rb_engine_gaussian_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z,
+                                         Sig=Sig, sigma=sigma, base_cut=base_cut)))
   }
 
   ## =====================================================================
@@ -186,9 +199,10 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
            "found ", length(sd_v), " (", paste(sd_v, collapse=", "), ").",
            call.=FALSE)
     sigu <- as.numeric(dm[, sd_v])
-    return(.rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu, family=fam,
-                      sigma=NULL, trials=trials, mubar=mubar,
-                      base_cut=base_cut, n_quad=n_quad, quad_range=quad_range))
+    return(finish(.rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu,
+                             family=fam, sigma=NULL, trials=trials, mubar=mubar,
+                             base_cut=base_cut, n_quad=n_quad,
+                             quad_range=quad_range)))
   }
 
   ## ---- multivariate / non-intercept RE: p-dimensional quadrature ----
@@ -201,13 +215,15 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
     return(fb("a random-effect design that could not be read from standata"))
   Z   <- do.call(cbind, Zc)                            # N x p
   Sig <- .rb_re_cov_draws(fit, dm)                     # S x p x p
-  return(.rb_engine_glmm_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z, Sig=Sig,
-                            family=fam, trials=trials, mubar_W=mubar,
-                            base_cut=base_cut, quad_range=quad_range))
+  return(finish(.rb_engine_glmm_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z,
+                                   Sig=Sig, family=fam, trials=trials,
+                                   mubar_W=mubar, base_cut=base_cut,
+                                   quad_range=quad_range)))
 }
 
 #' @export
-rb_loo.stanreg <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...) {
+rb_loo.stanreg <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
+                           reloo = FALSE, ...) {
   # rstanarm path: same estimator, rstanarm accessors.
   #
   # UNTESTED PATH. rstanarm is not installed in the package's dev environment,
@@ -215,9 +231,14 @@ rb_loo.stanreg <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...
   # and emits a one-time warning so an adopter knows they are on the
   # unvalidated path. Scope limitations warn+fall back to rstanarm::loo(),
   # exactly like the brms path.
+  .rb_validate_args(base_cut, n_quad, quad_range, reloo)
+  if (isTRUE(reloo))
+    stop("rb_loo: reloo = TRUE is only implemented for brmsfit objects (it ",
+         "delegates to brms::reloo). For rstanarm, refit high-k folds with ",
+         "rstanarm::loo(fit, k_threshold = ", base_cut, ") instead.",
+         call. = FALSE)
   if (!requireNamespace("rstanarm", quietly=TRUE))
     stop("rb_loo.stanreg needs rstanarm installed.", call.=FALSE)
-  .rb_validate_args(base_cut, n_quad, quad_range)
   warning("rb_loo.stanreg is an untested code path (rstanarm was not available ",
           "when the package was validated). Sanity-check the result against ",
           "brms::loo()/reloo() before relying on it.", call.=FALSE)

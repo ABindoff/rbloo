@@ -11,19 +11,21 @@ Description: A closed-form, a-priori triage-and-cure for hierarchical
     the random-effect block -- analytically for the Gaussian case, by cheap 1-D
     quadrature for Bernoulli, binomial and Poisson GLMMs -- so the fiber-driven
     failures disappear at zero refit cost, matching exact refits. Residual folds
-    are flagged for a genuine refit. Compatible with 'brms' and 'rstanarm' fits
-    and the 'loo' ecosystem.
+    are flagged for a genuine refit. Compatible with 'brms', 'rstanarm' and
+    'smoothbp' fits and the 'loo' ecosystem.
 License: MIT + file LICENSE
 URL: https://github.com/ABindoff/rbloo
 BugReports: https://github.com/ABindoff/rbloo/issues
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.1
 Imports:
     loo,
     posterior,
-    stats
+    stats,
+    utils
 Suggests:
     brms,
     rstanarm,
+    smoothbp,
     testthat (>= 3.0.0)
+Config/roxygen2/version: 8.0.0

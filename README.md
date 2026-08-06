@@ -38,8 +38,20 @@ rb
 #>   elpd_rb = ...    elpd_full(PSIS) = ...
 #>   PSIS-LOO : #(k>0.7) = ...
 #>   RB-LOO   : #(k>0.7) = 0   <- fiber failures removed
-#>   refit_flag: 0 fold(s) still k_base>0.70 -> send to reloo
+#>   refit_flag: none (all RB-LOO k <= 0.70) -> no refits needed
 ```
+
+If any folds remain flagged after RB, `rb_loo(fit, reloo = TRUE)` refits them
+exactly — one refit per flagged fold, via `brms::reloo()` for brms fits or
+`update()` for smoothbp fits — and substitutes the exact elpd into `elpd_rb`.
+Usually that is a handful of refits instead of the dozens PSIS-LOO alone would
+flag.
+
+Compare models on their RB elpd with `loo_compare(rb1, rb2)` — the familiar
+`loo` output, computed on the marginal predictive, with guardrails: it refuses
+to compare an RB result against a plain (conditional) PSIS-LOO or against a
+fallback, and warns when residual flagged folds could be carrying the
+difference.
 
 The returned object carries, per observation:
 
@@ -50,7 +62,7 @@ The returned object carries, per observation:
 | `pointwise$elpd_rb` | Rao-Blackwellised pointwise elpd (the cure) |
 | `diagnostics$pareto_k` | base Pareto-k̂ after RB (should be < 0.7) |
 | `diagnostics$pareto_k_full` | full conditional PSIS-LOO k̂ (the incumbent) |
-| `refit_flag` | TRUE where k_base still > `base_cut` → send to `reloo` |
+| `refit_flag` | TRUE where the RB Pareto-k̂ still > `base_cut` → refit exactly (`reloo = TRUE`) |
 
 ## What it targets
 
@@ -102,6 +114,23 @@ objects remain hard errors — those are usage errors, not model-scope limitatio
 `brmsfit` is fully supported and tested. The `stanreg` (rstanarm) path shares the
 same estimator and the same warn-and-fall-back behaviour, but is not yet validated
 end-to-end; it emits a warning to that effect.
+
+### `smoothbp` fits
+
+`smoothbp_fit` objects (hierarchical piecewise regression with smoothed
+change-points, including the spike-and-slab `smoothbp_ss_fit` variant) are
+supported for a **random intercept on `b0`**, i.e. `b0 = ~ 1 + (1 | group)`.
+Conditional on a draw, the change-point mean `f(t; θ)` is just a number, so the
+leave-one-out predictive that marginalises `u_j` is the same closed-form Gaussian
+downdate used for a Gaussian GLMM: the non-linearity of the mean function enters
+only through the fixed-effect predictor, and RB-LOO is **exact** here (checked
+fold-by-fold against dense numerical marginalisation, agreement ~1e-14).
+
+Random effects on `b1`, `deltas`, `omega` or `rho` warn and fall back to
+PSIS-LOO. For `omega`/`rho` the mean is non-linear in the random effect, so no
+closed form exists; for `b1`/`deltas` the effective RE design column is itself a
+function of the draw (`τ - ω⁽ˢ⁾`), which the fixed-`Z` engines cannot represent.
+A fit with no random intercept falls back too — there is nothing to marginalise.
 
 ## References
 

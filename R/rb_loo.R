@@ -24,28 +24,42 @@
 
 #' Rao-Blackwellised LOO
 #'
-#' @param fit a fitted model (brmsfit; stanreg via the shared extractor)
+#' @param fit a fitted model (brmsfit; stanreg and smoothbp_fit via the shared
+#'   extractors)
 #' @param base_cut Pareto-k threshold above which a fold is flagged for refit
 #' @param n_quad number of quadrature nodes for non-Gaussian families
 #' @param quad_range half-width of the standardised RE quadrature grid, in prior
 #'   standard deviations. The default (6) is ample for grouped REs; for
 #'   observation-level (singleton) REs with extreme responses the integrand can
 #'   sit further out, so widen to 8-10.
+#' @param reloo logical. If TRUE, folds still flagged after RB-LOO (RB
+#'   Pareto-k > \code{base_cut}) are refit exactly, one refit per flagged
+#'   fold, with the exact leave-one-out elpd substituted into \code{elpd_rb},
+#'   the fold's Pareto-k set to 0 (exact, no importance sampling) and its
+#'   refit flag cleared. The refit observation indices are recorded in
+#'   \code{meta$reloo_obs}. brms fits delegate to \code{brms::reloo()};
+#'   smoothbp fits refit via \code{update.smoothbp_fit()} (needs a smoothbp
+#'   version providing it; spike-and-slab fits are not supported). Each fold
+#'   costs a full refit, so run \code{rb_loo(fit)} first if you want to see
+#'   how many folds are flagged before committing.
 #' @return an object of class "rb_loo"
 #' @export
-rb_loo <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6, ...)
+rb_loo <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
+                   reloo = FALSE, ...)
   UseMethod("rb_loo")
 
 #' @export
 rb_loo.default <- function(fit, ...)
   stop("rb_loo: no method for class ", paste(class(fit), collapse="/"),
-       ". Supported: brmsfit, stanreg.", call.=FALSE)
+       ". Supported: brmsfit, stanreg, smoothbp_fit.", call.=FALSE)
 
 # ---------------------------------------------------------------------
 # argument validation (shared by all methods). Fails loudly and early,
 # before any expensive extraction, with actionable messages.
 # ---------------------------------------------------------------------
-.rb_validate_args <- function(base_cut, n_quad, quad_range) {
+.rb_validate_args <- function(base_cut, n_quad, quad_range, reloo = FALSE) {
+  if (!is.logical(reloo) || length(reloo) != 1L || is.na(reloo))
+    stop("rb_loo: `reloo` must be TRUE or FALSE.", call.=FALSE)
   if (!is.numeric(base_cut) || length(base_cut) != 1L ||
       !is.finite(base_cut) || base_cut <= 0)
     stop("rb_loo: `base_cut` must be a single positive finite number ",
@@ -355,6 +369,43 @@ rb_loo.default <- function(fit, ...)
   ), class="rb_loo")
 }
 
+# ---------------------------------------------------------------------
+# Exact refit of the residual flagged folds (brms fits only).
+#
+# brms::reloo() accepts any loo-class object alongside the brmsfit, and
+# loo_rb IS one: its pareto_k are the RB-LOO k-hats, so pareto_k_ids()
+# inside reloo() selects exactly the folds rb_loo flagged. check = FALSE
+# is required because a matrix-built loo object carries no brms yhash
+# attribute (the response-hash check would false-positive). The refit
+# computes the exact LOO predictive p(y_i | y_-i) -- the same estimand
+# elpd_rb approximates -- so the exact values are substituted pointwise
+# and the fold flags cleared. brms::reloo() sets pareto_k = 0 for refit
+# folds (exact, no importance sampling); the merge carries that through.
+# ---------------------------------------------------------------------
+.rb_reloo_merge <- function(out, loo_exact, idx) {
+  out$pointwise$elpd_rb[idx]    <- loo_exact$pointwise[idx, "elpd_loo"]
+  out$estimates["elpd_rb"]      <- sum(out$pointwise$elpd_rb)
+  out$diagnostics$pareto_k[idx] <- loo_exact$diagnostics$pareto_k[idx]
+  out$refit_flag[idx]           <- FALSE
+  out$loo_rb                    <- loo_exact
+  out$meta$reloo_obs            <- idx
+  out
+}
+
+.rb_reloo_brms <- function(out, fit, base_cut) {
+  idx <- which(out$refit_flag)
+  if (!length(idx)) {
+    message("rb_loo: reloo = TRUE, but no folds have RB-LOO k > ", base_cut,
+            "; nothing to refit.")
+    return(out)
+  }
+  message("rb_loo: refitting ", length(idx), " flagged fold(s) exactly via ",
+          "brms::reloo() (one Stan refit per fold) ...")
+  loo_exact <- brms::reloo(fit, loo = out$loo_rb, k_threshold = base_cut,
+                           check = FALSE)
+  .rb_reloo_merge(out, loo_exact, idx)
+}
+
 # per-family conditional log-likelihood on a matrix of linear predictors
 .llk <- function(yv, eta, family, trials=NULL)
   switch(family,
@@ -387,14 +438,38 @@ print.rb_loo <- function(x, ...) {
     return(invisible(x))
   }
 
-  cat(sprintf("rb_loo  (%s GLMM; N=%s obs, G=%s groups)\n",
-              m$family, fG(m$N), fG(m$G)))
+  cat(sprintf("rb_loo  (%s; N=%s obs, G=%s groups)\n",
+              if (is.null(m$model)) paste(m$family, "GLMM")
+              else sprintf("%s, %s", m$model, m$family),
+              fG(m$N), fG(m$G)))
   cat(sprintf("  elpd_rb = %s    elpd_full(PSIS) = %s\n",
               fnum(x$estimates["elpd_rb"]), fnum(x$estimates["elpd_full"])))
   cat(sprintf("  PSIS-LOO : #(k>0.7) = %d  (max %s)\n", n_gt(kf, 0.7), fk(safemax(kf))))
   cat(sprintf("  RB-LOO   : #(k>0.7) = %d  (max %s)   <- fiber failures removed\n",
               n_gt(kb, 0.7), fk(safemax(kb))))
-  cat(sprintf("  refit_flag: %d fold(s) still k_base>%.2f -> send to reloo\n",
-              sum(x$refit_flag, na.rm=TRUE), m$base_cut))
+  obs_list <- function(idx) {
+    shown <- paste(utils::head(idx, 8L), collapse=", ")
+    if (length(idx) > 8L)
+      shown <- paste0(shown, ", ... [", length(idx) - 8L, " more]")
+    shown
+  }
+  if (!is.null(m$reloo_obs))
+    cat(sprintf("  reloo    : %d fold(s) refit exactly (obs %s); elpd_rb uses the exact values\n",
+                length(m$reloo_obs), obs_list(m$reloo_obs)))
+  n_flag <- sum(x$refit_flag, na.rm=TRUE)
+  if (n_flag > 0L) {
+    cat(sprintf("  refit_flag: %d fold(s) with RB-LOO k > %.2f (obs %s)\n",
+                n_flag, m$base_cut, obs_list(which(x$refit_flag))))
+    hint <- if (isTRUE(m$can_reloo))
+      "-> rb_loo(fit, reloo = TRUE) refits these folds exactly (one refit per fold)."
+    else if (identical(m$model, "smoothbp"))
+      "-> exact refits need update.smoothbp_fit(); upgrade smoothbp, then rb_loo(fit, reloo = TRUE)."
+    else
+      "-> refit these folds exactly with reloo() or loo_moment_match()."
+    cat("              ", hint, "\n", sep="")
+  } else {
+    cat(sprintf("  refit_flag: none (all RB-LOO k <= %.2f) -> no refits needed\n",
+                m$base_cut))
+  }
   invisible(x)
 }
