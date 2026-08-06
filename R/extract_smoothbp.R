@@ -51,12 +51,28 @@
 
 #' @export
 rb_loo.smoothbp_fit <- function(fit, base_cut = 0.7, n_quad = 64,
-                                quad_range = 6, ...) {
-  .rb_validate_args(base_cut, n_quad, quad_range)
+                                quad_range = 6, reloo = FALSE, ...) {
+  .rb_validate_args(base_cut, n_quad, quad_range, reloo)
+  if (isTRUE(reloo)) {
+    # fail BEFORE the expensive extraction, with the reason
+    if (inherits(fit, "smoothbp_ss_fit"))
+      stop("rb_loo: reloo = TRUE is not supported for spike-and-slab fits: ",
+           "update.smoothbp_fit() refits with smoothbp(), which would ",
+           "silently drop the spike-and-slab structure.", call. = FALSE)
+    if (!.rb_sbp_can_reloo(fit))
+      stop("rb_loo: reloo = TRUE needs update.smoothbp_fit(), which this ",
+           "smoothbp installation does not provide; reinstall smoothbp from ",
+           "the current source, then retry.", call. = FALSE)
+  }
   # loo::loo dispatches to smoothbp's own loo.smoothbp_fit method, so the
   # fallback needs no smoothbp-specific accessor.
-  fb <- function(reason)
+  fb <- function(reason) {
+    if (isTRUE(reloo))
+      warning("rb_loo: reloo = TRUE ignored -- RB-LOO was not applied (PSIS ",
+              "fallback), so there are no RB-flagged folds to refit.",
+              call. = FALSE)
     .rb_psis_fallback(fit, reason, base_cut, loo_fun = function(f) loo::loo(f))
+  }
 
   dm <- fit$dm
   if (is.null(dm) || is.null(dm$n_groups_b0))
@@ -144,5 +160,71 @@ rb_loo.smoothbp_fit <- function(fit, base_cut = 0.7, n_quad = 64,
                     quad_range = quad_range)
   out$meta$p_re  <- 1L
   out$meta$model <- "smoothbp"
+  out$meta$can_reloo <- .rb_sbp_can_reloo(fit)
+  if (isTRUE(reloo)) out <- .rb_reloo_smoothbp(out, fit, base_cut, gidx, y)
   out
+}
+
+# reloo needs smoothbp's update() method (absent before smoothbp gained it) and
+# a plain smoothbp fit (update() would silently refit an ss fit as non-ss)
+.rb_sbp_can_reloo <- function(fit) {
+  !inherits(fit, "smoothbp_ss_fit") &&
+    !is.null(utils::getS3method("update", "smoothbp_fit", optional = TRUE))
+}
+
+# ---------------------------------------------------------------------
+# Exact refit of the residual flagged folds (smoothbp fits).
+#
+# For each flagged observation i the model is refit on data[-i, ] via
+# update.smoothbp_fit(), and the exact LOO predictive p(y_i | y_-i) is
+# averaged over the refit posterior. Two cases, both exact for the
+# gaussian random-intercept scope rb_loo.smoothbp_fit enforces:
+#   * the group keeps other members -- its level survives the refit, so
+#     fitted(refit, newdata = row_i) includes the refit's u_j draw and
+#     the predictive SD is sigma;
+#   * observation i was a singleton -- smoothbp's factor() call drops the
+#     empty level, fitted() returns the population-level mean, and u_j is
+#     marginalised in closed form: SD = sqrt(sigma^2 + sigma_u^2).
+# ---------------------------------------------------------------------
+.rb_reloo_smoothbp <- function(out, fit, base_cut, gidx, y) {
+  idx <- which(out$refit_flag)
+  if (!length(idx)) {
+    message("rb_loo: reloo = TRUE, but no folds have RB-LOO k > ", base_cut,
+            "; nothing to refit.")
+    return(out)
+  }
+  message("rb_loo: refitting ", length(idx), " flagged fold(s) exactly (one ",
+          "smoothbp refit per fold) ...")
+  e_exact <- numeric(length(idx))
+  for (m in seq_along(idx)) {
+    i <- idx[m]
+    message("  refit ", m, "/", length(idx), " (leaving out observation ", i, ")")
+    refit <- stats::update(fit, data = fit$data[-i, , drop = FALSE],
+                           .verbose = FALSE)
+    mu    <- as.numeric(stats::fitted(refit,
+                                      newdata = fit$data[i, , drop = FALSE],
+                                      summary = FALSE))
+    dmat  <- posterior::as_draws_matrix(refit$draws)
+    sig   <- as.numeric(dmat[, "sigma"])
+    ll <- if (sum(gidx == gidx[i]) > 1L) {
+      stats::dnorm(y[i], mu, sig, log = TRUE)
+    } else {
+      sigu <- as.numeric(dmat[, "sigma_u"])
+      stats::dnorm(y[i], mu, sqrt(sig^2 + sigu^2), log = TRUE)
+    }
+    mx <- max(ll)
+    e_exact[m] <- mx + log(mean(exp(ll - mx)))
+  }
+  # substitute into a copy of the RB loo object, mirroring what brms::reloo
+  # does on the brms path: exact elpd, pareto_k = 0, estimates recomputed
+  loo_exact <- out$loo_rb
+  loo_exact$pointwise[idx, "elpd_loo"] <- e_exact
+  if ("looic" %in% colnames(loo_exact$pointwise))
+    loo_exact$pointwise[idx, "looic"] <- -2 * e_exact
+  loo_exact$diagnostics$pareto_k[idx] <- 0
+  for (cn in intersect(rownames(loo_exact$estimates), c("elpd_loo", "looic"))) {
+    pw <- loo_exact$pointwise[, cn]
+    loo_exact$estimates[cn, ] <- c(sum(pw), sqrt(length(pw) * stats::var(pw)))
+  }
+  .rb_reloo_merge(out, loo_exact, idx)
 }

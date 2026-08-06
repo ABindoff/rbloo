@@ -1,18 +1,9 @@
 # Integration tests for rb_loo() on smoothbp fits. smoothbp ships a Rust
 # sampler, so these are fast (no Stan compile), but they still need the package.
 
-# One shared two-segment data set with small, weakly-identified subjects --
-# exactly the regime where the random intercept drives PSIS-LOO failures.
-.sbp_data <- function(seed = 42, J = 30) {
-  set.seed(seed)
-  nj  <- sample(3:5, J, replace = TRUE)
-  id  <- rep(seq_len(J), nj)
-  tau <- unlist(lapply(nj, function(k) sort(runif(k, 0, 10))))
-  u   <- rnorm(J, 0, 2)
-  mu  <- 1 + 0.4 * (tau - 5) - 1.1 * (tau - 5) / (1 + exp(-(tau - 5) * 3))
-  data.frame(y = mu + u[id] + rnorm(length(id), 0, 0.5),
-             tau = tau, id = factor(id))
-}
+# The shared two-segment data generator .sbp_data() lives in helper-rb_loo.R
+# (small, weakly-identified subjects -- exactly the regime where the random
+# intercept drives PSIS-LOO failures); it is shared with test-reloo.R.
 
 test_that("rb_loo cures PSIS failures on a smoothbp random-intercept fit", {
   skip_on_cran()

@@ -38,8 +38,13 @@ rb
 #>   elpd_rb = ...    elpd_full(PSIS) = ...
 #>   PSIS-LOO : #(k>0.7) = ...
 #>   RB-LOO   : #(k>0.7) = 0   <- fiber failures removed
-#>   refit_flag: 0 fold(s) still k_base>0.70 -> send to reloo
+#>   refit_flag: none (all RB-LOO k <= 0.70) -> no refits needed
 ```
+
+If any folds remain flagged after RB, `rb_loo(fit, reloo = TRUE)` refits them
+exactly (brms fits only; one Stan refit per flagged fold, via `brms::reloo()`
+on the RB diagnostics) and substitutes the exact elpd into `elpd_rb` — usually
+a handful of refits instead of the dozens PSIS-LOO alone would flag.
 
 The returned object carries, per observation:
 
@@ -50,7 +55,7 @@ The returned object carries, per observation:
 | `pointwise$elpd_rb` | Rao-Blackwellised pointwise elpd (the cure) |
 | `diagnostics$pareto_k` | base Pareto-k̂ after RB (should be < 0.7) |
 | `diagnostics$pareto_k_full` | full conditional PSIS-LOO k̂ (the incumbent) |
-| `refit_flag` | TRUE where k_base still > `base_cut` → send to `reloo` |
+| `refit_flag` | TRUE where the RB Pareto-k̂ still > `base_cut` → refit exactly (`reloo = TRUE`) |
 
 ## What it targets
 
