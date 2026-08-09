@@ -153,6 +153,9 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
   vars <- posterior::variables(dm)
   etaF <- brms::posterior_linpred(fit, re.form = NA)   # S x N, link scale (incl offset)
   Lf   <- brms::log_lik(fit)                           # S x N conditional
+  # real chain ids for relative_eff(); brms stacks draws chain-major
+  cid  <- .rb_chain_id(nrow(Lf),
+                       tryCatch(brms::nchains(fit), error = function(e) NA))
   if (!all(dim(etaF) == dim(Lf)))
     stop("rb_loo: internal error, posterior_linpred and log_lik disagree in ",
          "shape.", call.=FALSE)
@@ -173,7 +176,8 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
     Z   <- do.call(cbind, Zc)                          # N x p
     Sig <- .rb_re_cov_draws(fit, dm)                   # S x p x p
     return(finish(.rb_engine_gaussian_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z,
-                                         Sig=Sig, sigma=sigma, base_cut=base_cut)))
+                                         Sig=Sig, sigma=sigma, base_cut=base_cut,
+                                         chain_id=cid)))
   }
 
   ## =====================================================================
@@ -202,7 +206,7 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
     return(finish(.rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu,
                              family=fam, sigma=NULL, trials=trials, mubar=mubar,
                              base_cut=base_cut, n_quad=n_quad,
-                             quad_range=quad_range)))
+                             quad_range=quad_range, chain_id=cid)))
   }
 
   ## ---- multivariate / non-intercept RE: p-dimensional quadrature ----
@@ -218,7 +222,7 @@ rb_loo.brmsfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
   return(finish(.rb_engine_glmm_mv(Lf=Lf, y=y, gidx=gidx, etaF=etaF, Z=Z,
                                    Sig=Sig, family=fam, trials=trials,
                                    mubar_W=mubar, base_cut=base_cut,
-                                   quad_range=quad_range)))
+                                   quad_range=quad_range, chain_id=cid)))
 }
 
 #' @export
@@ -296,7 +300,9 @@ rb_loo.stanreg <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
   ebar  <- colMeans(rstanarm::posterior_epred(fit))
   mubar <- switch(fam, gaussian=NULL, poisson=ebar, bernoulli=ebar*(1-ebar))
 
+  cid <- .rb_chain_id(nrow(Lf), tryCatch(fit$stanfit@sim$chains,
+                                         error = function(e) NA))
   .rb_engine(Lf=Lf, y=y, gidx=gidx, etaF=etaF, sigu=sigu, family=fam,
              sigma=sigma, trials=NULL, mubar=mubar, base_cut=base_cut,
-             n_quad=n_quad, quad_range=quad_range)
+             n_quad=n_quad, quad_range=quad_range, chain_id=cid)
 }

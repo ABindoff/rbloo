@@ -63,18 +63,18 @@ test_that("elpd_full matches mcp's own conditional loo()", {
   # rb_loo's elpd_full is PSIS over that same conditional likelihood, so the
   # two must agree; this pins the log-likelihood extraction end to end.
   #
-  # Tolerance is 1e-3, not machine precision, and the reason is NOT slack in
-  # the extraction: .rb_engine calls relative_eff() with chain_id = 1 for all
-  # draws, while mcp passes the real chain ids, which changes the PSIS tail
-  # length slightly. Measured at 3.7e-4 nats on elpd = -86 (the whole gap is
-  # attributable to r_eff; see scratch diagnostic). Any genuine misalignment
-  # of draws or observations would be orders of magnitude larger than this.
+  # This also pins the r_eff convention. .rb_engine used to pass
+  # chain_id = rep(1L, S) while mcp passes the real chain ids, which changes
+  # the PSIS tail length and put a 3.7e-4 gap here on a 2-chain fit. Now that
+  # the engines take the real chain ids the two agree to machine precision, so
+  # a regression on that convention fails this test rather than hiding in the
+  # fourth decimal. See analysis/measure_reff_convention.R.
   d   <- .mcp_data(seed = 7, J = 10)
   fit <- .mcp_fit(d, list(y ~ 1 + (1 | id), 1 ~ 0 + x), seed = 7)
   rb  <- rb_loo(fit)
   lf  <- suppressWarnings(loo::loo(fit))
   expect_equal(unname(rb$estimates["elpd_full"]),
-               unname(lf$estimates["elpd_loo", "Estimate"]), tolerance = 1e-3)
+               unname(lf$estimates["elpd_loo", "Estimate"]), tolerance = 1e-8)
 })
 
 test_that("a varying change point warns and falls back to PSIS-LOO", {

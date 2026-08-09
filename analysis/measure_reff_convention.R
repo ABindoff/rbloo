@@ -72,18 +72,22 @@ modes <- c("one", "real", "unity")
 Lf <- lapply(modes, function(m) psis(L_full, m)); names(Lf) <- modes
 Lr <- lapply(modes, function(m) psis(L_rb,   m)); names(Lr) <- modes
 
-hdr("self-check: reconstruction matches rb_loo()")
-cat(sprintf("  elpd_full  rebuilt vs rb_loo : %.6f vs %.6f  (diff %.2e)\n",
-            unname(Lf$one$estimates["elpd_loo", "Estimate"]),
-            unname(rb$estimates["elpd_full"]),
-            unname(Lf$one$estimates["elpd_loo", "Estimate"] -
-                   rb$estimates["elpd_full"])))
-cat(sprintf("  elpd_rb    rebuilt vs rb_loo : %.4f vs %.4f  (diff %.2e)\n",
-            unname(Lr$one$estimates["elpd_loo", "Estimate"]),
-            unname(rb$estimates["elpd_rb"]),
-            unname(Lr$one$estimates["elpd_loo", "Estimate"] -
+hdr("self-check: which convention does the installed rb_loo() use?")
+# Do not assume: identify it. The package used chain_id = 1 before
+# 2026-08-09 and the real chain ids after, so this both validates the
+# reconstruction and records which side of that change the code is on.
+gaps <- vapply(modes, function(m)
+  abs(unname(Lf[[m]]$estimates["elpd_loo", "Estimate"] -
+             rb$estimates["elpd_full"])), numeric(1))
+for (m in modes)
+  cat(sprintf("  elpd_full rebuilt(%-5s) vs rb_loo : %+.3e\n", m, gaps[[m]]))
+best <- names(which.min(gaps))
+cat(sprintf("  -> rb_loo() matches '%s' (gap %.2e)\n", best, min(gaps)))
+if (min(gaps) > 1e-6)
+  cat("  !! matches NONE of them; the reconstruction or the engine has changed\n")
+cat(sprintf("  elpd_rb   rebuilt(%-5s) vs rb_loo : %+.3e\n", best,
+            unname(Lr[[best]]$estimates["elpd_loo", "Estimate"] -
                    rb$estimates["elpd_rb"])))
-cat("  (elpd_rb is quadrature-sensitive; a small gap here is the grid, not r_eff)\n")
 
 ## ---- what actually moves ----
 cmp <- function(A, B, lab) {

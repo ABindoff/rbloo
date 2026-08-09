@@ -218,10 +218,14 @@ rb_loo.mcpfit <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
          "report this rather than trusting the result.", call. = FALSE)
 
   ## ---- exact Gaussian random-intercept RB-LOO (the p = 1 downdate) ----
+  # real chain ids: mcp keeps one mcmc matrix per chain in $mcmc_post, which
+  # posterior:: flattens chain-major.
+  cid <- .rb_chain_id(S, tryCatch(length(fit$mcmc_post),
+                                  error = function(e) NA))
   out <- .rb_engine(Lf = Lf, y = y, gidx = gidx, etaF = etaF, sigu = sigu,
                     family = "gaussian", sigma = sigma, trials = NULL,
                     mubar = NULL, base_cut = base_cut, n_quad = n_quad,
-                    quad_range = quad_range)
+                    quad_range = quad_range, chain_id = cid)
   out$meta$p_re      <- 1L
   out$meta$model     <- "mcp"
   out$meta$can_reloo <- FALSE

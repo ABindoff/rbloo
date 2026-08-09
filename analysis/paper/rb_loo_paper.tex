@@ -4,6 +4,46 @@
 % a closed-form triage and Rao-Blackwellised cure for hierarchical LOO.
 % Target: Statistics and Computing (or Bayesian Analysis).
 % =====================================================================
+%
+% !! BEFORE SUBMISSION: REGENERATE ALL EMPIRICAL NUMBERS !!  (2026-08-09)
+%
+% Deliberately deferred to as late as possible, so that the reported values
+% are produced by the same toolchain a referee would get when re-running.
+% Two independent reasons, both verified:
+%
+% 1. r_eff convention (FIXED in the package, numbers here PREDATE the fix).
+%    .rb_engine passed chain_id = rep(1L, S) to loo::relative_eff(), i.e. it
+%    treated all draws as one chain, while every backend stacks several.
+%    r_eff sets the PSIS tail length, so both elpd and k-hat move. Measured
+%    on E-real (analysis/measure_reff_convention.R): conditional k-hat moves
+%    by up to 0.058, elpd_full by 0.004, and the count of k>0.7 folds changed
+%    by one. The saved E-real run has THREE folds within 0.058 of the 0.7
+%    cut, so the "five PSIS failures" figure in Section~\ref{sec:ereal} and
+%    the AUC 0.84 alongside it can both move. The RB side is essentially
+%    immune (elpd_rb moves 1e-5, no fold crosses), so the C2 "cures every
+%    failure" claim is robust -- verified 0 RB failures under all three
+%    conventions in use anywhere in this repo.
+%    NOT affected: Table~\ref{tab:sim}. Its Gaussian row comes from a
+%    single-chain Gibbs sampler in analysis/rb_loo.R that additionally thins
+%    by 2 ("~independent for loo r_eff=1"), and its logistic row comes from
+%    analysis/replicate_glmm.R, which calls loo(fit) and so already used the
+%    real chain ids. Those two rows never went through .rb_engine.
+%    Affected (they DO call rb_loo()): E-real, E-decision, E-basestress and
+%    the multivariate validations.
+%
+% 2. Toolchain drift, and this is the bigger one. Re-running
+%    analysis/ereal_epilepsy.R unchanged, same seed, gives EIGHT PSIS
+%    failures where the saved 2026-07-20 run (analysis/ereal_epilepsy.rds)
+%    recorded five, with a different max k-hat. The r_eff change accounts
+%    for at most one of those. The rest is a different brms/rstan/Stan build
+%    producing different draws from the same seed, so E-real as written does
+%    not currently reproduce irrespective of item 1.
+%
+% Action at submission: unify the analysis scripts on the package's engine
+% (three r_eff conventions are currently live across analysis/*.R), re-run
+% every script that feeds a reported number, and record sessionInfo() or an
+% renv lockfile next to the .rds outputs so the next re-run is checkable.
+% =====================================================================
 \usepackage[utf8]{inputenc}
 \usepackage{amsmath,amssymb,amsthm}
 \usepackage{graphicx}
@@ -176,12 +216,30 @@ data precision $I_j$ (the Fisher information the group's observations carry abou
 $\alpha_j$), the Gelman--Pardoe pooling factor is
 $\pi_j = (1/\sigma_u^2)/(I_j + 1/\sigma_u^2)$, the fraction of the posterior
 precision of $\alpha_j$ contributed by the prior \citep{gelman2006weakly}. A
-singleton in a weakly-informative hierarchy has $\pi_j$ near $1$ (fully pooled,
-data-starved); a large group has $\pi_j$ near $0$. The per-observation
+group whose own data are uninformative about $\alpha_j$ relative to the prior has
+$\pi_j$ near $1$ (fully pooled); a group that determines its own effect has
+$\pi_j$ near $0$ (unpooled). Note that a singleton in a \emph{diffuse} hierarchy
+is the second case, not the first: with $\sigma_u^2$ large, its lone observation
+fixes $\alpha_j$ entirely. Having little data and being prior-dominated are
+distinct properties, and it is the unpooled singleton that is pathological here.
+The per-observation
 \emph{structural leverage} $h_i = I_i/(I_j + 1/\sigma_u^2)$, with within-group
 Fisher additivity $I_j=\sum_{i\in j}I_i$, satisfies $\sum_{i \in j} h_i = 1 - \pi_j$
 \citep{bindoff2026fibr}, and is the shrinkage-weighted observation leverage of
-\citet{lovison2026augmented}.
+\citet{lovison2026augmented}. The two diagnostics are related by
+\[
+h_i = I_i\,\sigma_u^2\,\pi_j ,
+\]
+so they are proportional rather than opposed. The group total $1-\pi_j$ decreases
+in $\pi_j$, but it is shared among $n_j = (1-\pi_j)/(I_i\sigma_u^2\pi_j)$
+observations, so the per-observation share rises: the sum and the individual share
+move in opposite directions. This identity also delimits what $h_i$ contributes.
+When the Fisher weight is constant across observations, as in the Gaussian
+random-intercept case with $I_i = 1/\sigma^2$, the two rank observations
+identically and $h_i$ adds nothing to $\pi_j$. It becomes a distinct diagnostic
+only when $I_i$ varies: through the fitted mean in a non-Gaussian family, or
+through the design in the random-slope case, where $h_i = z_i'V_jz_i/\sigma^2$ and
+$\pi_j = \mathrm{tr}(\Sigma^{-1}V_j)/p$ are different functionals of the same $V_j$.
 
 \paragraph{Conditional versus marginal LOO, and integrated importance sampling.}
 A hierarchical model admits two LOO estimands \citep{merkle2019bayesian}: the
@@ -374,7 +432,10 @@ per-observation structural leverage $h_i$ from the Fisher blocks. Two regimes
 differ. In a Gaussian LMM the per-observation Fisher information is the constant
 $1/\sigma^2$, so $h_i$ depends only on group size (and, through $\sigma_u$, a single
 fitted scalar): the ranking of folds is a design quantity, available before the
-outcomes are seen. In a GLMM the Fisher weight $I_i$ depends on the fitted mean, so
+outcomes are seen. By the identity $h_i = I_i\sigma_u^2\pi_j$ of
+Section~\ref{sec:prior}, this is the case in which $h_i$ and $\pi_j$ rank
+folds identically, so there the triage rests on a single diagnostic wearing two
+names. In a GLMM the Fisher weight $I_i$ depends on the fitted mean, so
 $h_i$ is evaluated at the posterior mean of one model fit; it is still formed
 without importance weights and without case deletion, but it is post-fit, not
 pre-data. The triage is thus design-time relative to the cross-validation, not
@@ -510,6 +571,10 @@ and PSIS-LOO (red) scatter above it.}\label{fig:emm}
 \end{figure}
 
 % ---- E-real ----
+% REGENERATE BEFORE SUBMISSION (see the header block): the "five PSIS
+% failures" and "AUC 0.84" below are the most exposed numbers in the paper.
+% Three folds sit within one r_eff-perturbation (0.058) of the 0.7 cut, and
+% a plain re-run on the current toolchain already gives eight failures.
 \subsection{Real data: epilepsy (E-real)}\label{sec:ereal}
 The \texttt{brms::epilepsy} data holds $236$ seizure counts on $59$ patients over
 four visits, overdispersed and a known PSIS-LOO stressor. A patient-effect Poisson

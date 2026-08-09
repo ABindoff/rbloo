@@ -131,6 +131,44 @@ rb_loo.default <- function(fit, ...)
 }
 
 # ---------------------------------------------------------------------
+# PSIS-LOO on a log-likelihood matrix, shared by all three engines.
+#
+# r_eff is the relative efficiency of the importance-weight draws, and it
+# sets the PSIS tail length, so it moves BOTH the smoothed elpd and the
+# Pareto-k. loo::relative_eff() needs the real chain ids to separate
+# within-chain autocorrelation from between-chain variation; concatenating
+# chains and declaring them one chain misestimates it, and the error grows
+# exactly when chains disagree, i.e. the poor-mixing regime where k-hat
+# reliability is the thing being measured.
+#
+# Measured on E-real (epilepsy, Poisson, 4 chains) the two conventions move
+# the conditional k-hat by up to 0.058, enough to reclassify folds at the
+# 0.7 cut; the RB side is essentially immune (elpd moves 1e-5). See
+# analysis/measure_reff_convention.R. chain_id = NULL falls back to treating
+# the draws as a single chain, which is correct for a genuinely single-chain
+# fit and is the honest default when a backend does not expose the layout.
+# ---------------------------------------------------------------------
+.rb_loo_of <- function(L, chain_id = NULL) {
+  S <- nrow(L); N <- ncol(L)
+  cid <- if (is.null(chain_id) || length(chain_id) != S) rep(1L, S)
+         else as.integer(chain_id)
+  reff <- tryCatch(loo::relative_eff(exp(L), chain_id = cid),
+                   error = function(e) rep(1, N))
+  suppressWarnings(loo::loo(L, r_eff = reff))
+}
+
+# Build chain ids for draws stacked chain-major (all of chain 1, then chain
+# 2, ...), which is what posterior::as_draws_matrix() and every backend's
+# log_lik()/posterior_linpred() produce. Returns NULL -- meaning "treat as
+# one chain" -- if the layout cannot be established, rather than guessing.
+.rb_chain_id <- function(S, n_chains) {
+  n <- suppressWarnings(as.integer(n_chains))
+  if (length(n) != 1L || is.na(n) || n < 1L || S %% n != 0L) return(NULL)
+  if (n == 1L) return(NULL)
+  rep(seq_len(n), each = S %/% n)
+}
+
+# ---------------------------------------------------------------------
 # core engine. All model-specific extraction is done by the S3 methods,
 # which hand the engine plain arrays:
 #   Lf    : S x N full conditional log-lik matrix   (from log_lik(fit))
@@ -143,14 +181,11 @@ rb_loo.default <- function(fit, ...)
 #   mubar : N a-priori Fisher weight per obs (see .fisher_weight)
 # ---------------------------------------------------------------------
 .rb_engine <- function(Lf, y, gidx, etaF, sigu, family, sigma=NULL, trials=NULL,
-                       mubar=NULL, base_cut=0.7, n_quad=64, quad_range=6) {
+                       mubar=NULL, base_cut=0.7, n_quad=64, quad_range=6,
+                       chain_id=NULL) {
   # args are validated up front by the public S3 methods (.rb_validate_args)
   S <- nrow(etaF); N <- ncol(etaF); G <- max(gidx)
-  loo_of <- function(L) {
-    reff <- tryCatch(loo::relative_eff(exp(L), chain_id=rep(1L,S)),
-                     error=function(e) rep(1,N))
-    suppressWarnings(loo::loo(L, r_eff=reff))
-  }
+  loo_of <- function(L) .rb_loo_of(L, chain_id)
 
   ## ---- RB-LOO: marginalise the RE block given each base draw ----
   Lrb <- matrix(0, S, N)
@@ -225,13 +260,10 @@ rb_loo.default <- function(fit, ...)
 # log-lik for the PSIS comparison. Cost is O(S * G) small p x p solves plus
 # O(S * N) rank-1 updates.
 # =====================================================================
-.rb_engine_gaussian_mv <- function(Lf, y, gidx, etaF, Z, Sig, sigma, base_cut=0.7) {
+.rb_engine_gaussian_mv <- function(Lf, y, gidx, etaF, Z, Sig, sigma, base_cut=0.7,
+                                   chain_id=NULL) {
   S <- nrow(etaF); N <- ncol(etaF); p <- ncol(Z); G <- max(gidx)
-  loo_of <- function(L) {
-    reff <- tryCatch(loo::relative_eff(exp(L), chain_id=rep(1L,S)),
-                     error=function(e) rep(1,N))
-    suppressWarnings(loo::loo(L, r_eff=reff))
-  }
+  loo_of <- function(L) .rb_loo_of(L, chain_id)
   grp_idx <- split(seq_len(N), gidx)
 
   ## ---- RB-LOO: exact matrix downdate per group and draw ----
@@ -304,17 +336,14 @@ rb_loo.default <- function(fit, ...)
 # conditional is broad). Cost is O(S * N * K), K = nodes^p, so we cap at p <= 3.
 # =====================================================================
 .rb_engine_glmm_mv <- function(Lf, y, gidx, etaF, Z, Sig, family, trials=NULL,
-                               mubar_W=NULL, base_cut=0.7, quad_range=6) {
+                               mubar_W=NULL, base_cut=0.7, quad_range=6,
+                               chain_id=NULL) {
   S <- nrow(etaF); N <- ncol(etaF); p <- ncol(Z); G <- max(gidx)
   m  <- switch(as.character(p), "1"=64L, "2"=25L, "3"=11L, 9L)   # nodes per dim
   Zgrid <- as.matrix(expand.grid(rep(list(seq(-quad_range, quad_range, length.out=m)), p)))
   K   <- nrow(Zgrid); tZg <- t(Zgrid)                    # p x K
   lp0 <- -0.5 * rowSums(Zgrid^2)                          # K: log N(z|0,I) up to const
-  loo_of <- function(L) {
-    reff <- tryCatch(loo::relative_eff(exp(L), chain_id=rep(1L,S)),
-                     error=function(e) rep(1,N))
-    suppressWarnings(loo::loo(L, r_eff=reff))
-  }
+  loo_of <- function(L) .rb_loo_of(L, chain_id)
   grp_idx <- split(seq_len(N), gidx)
 
   Lrb <- matrix(0, S, N)

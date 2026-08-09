@@ -154,10 +154,13 @@ rb_loo.smoothbp_fit <- function(fit, base_cut = 0.7, n_quad = 64,
   rm(muF)
 
   ## ---- exact Gaussian random-intercept RB-LOO (the p = 1 downdate) ----
+  # real chain ids: smoothbp stores draws as a draws_array (iteration x chain
+  # x variable), which as_draws_matrix() flattens chain-major.
+  cid <- .rb_chain_id(nrow(Lf), tryCatch(fit$chains, error = function(e) NA))
   out <- .rb_engine(Lf = Lf, y = y, gidx = gidx, etaF = etaF, sigu = sigu,
                     family = "gaussian", sigma = sigma, trials = NULL,
                     mubar = NULL, base_cut = base_cut, n_quad = n_quad,
-                    quad_range = quad_range)
+                    quad_range = quad_range, chain_id = cid)
   out$meta$p_re  <- 1L
   out$meta$model <- "smoothbp"
   out$meta$can_reloo <- .rb_sbp_can_reloo(fit)
