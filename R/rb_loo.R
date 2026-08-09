@@ -51,7 +51,7 @@ rb_loo <- function(fit, base_cut = 0.7, n_quad = 64, quad_range = 6,
 #' @export
 rb_loo.default <- function(fit, ...)
   stop("rb_loo: no method for class ", paste(class(fit), collapse="/"),
-       ". Supported: brmsfit, stanreg, smoothbp_fit.", call.=FALSE)
+       ". Supported: brmsfit, stanreg, smoothbp_fit, mcpfit.", call.=FALSE)
 
 # ---------------------------------------------------------------------
 # argument validation (shared by all methods). Fails loudly and early,
@@ -464,6 +464,8 @@ print.rb_loo <- function(x, ...) {
       "-> rb_loo(fit, reloo = TRUE) refits these folds exactly (one refit per fold)."
     else if (identical(m$model, "smoothbp"))
       "-> exact refits need update.smoothbp_fit(); upgrade smoothbp, then rb_loo(fit, reloo = TRUE)."
+    else if (identical(m$model, "mcp"))
+      "-> no automated refit for mcp; re-run mcp() without each flagged obs."
     else
       "-> refit these folds exactly with reloo() or loo_moment_match()."
     cat("              ", hint, "\n", sep="")

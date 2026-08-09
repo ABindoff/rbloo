@@ -130,6 +130,26 @@ Random effects on `b1`, `deltas`, `omega` or `rho` warn and fall back to
 PSIS-LOO. For `omega`/`rho` the mean is non-linear in the random effect, so no
 closed form exists; for `b1`/`deltas` the effective RE design column is itself a
 function of the draw (`τ - ω⁽ˢ⁾`), which the fixed-`Z` engines cannot represent.
+
+### `mcp` fits
+
+`mcpfit` objects (multiple change points, fitted with JAGS) are supported for a
+**varying intercept**, e.g. `y ~ 1 + (1 | id)` on a segment, with a Gaussian
+family. Note that mcp's own `loo()` defaults to `varying = TRUE`, so it targets
+the *conditional* predictive; `rb_loo()` gives the marginal one.
+
+Scope is decided by a numerical test rather than by parameter names: the shift
+`fitted(varying = TRUE) - fitted(varying = FALSE)` must be constant within each
+draw and group, which is what an additive random intercept implies. A varying
+change point fails that test decisively (measured spread ≈ 5.7 against 0), as
+would a varying slope or an intercept jump on a later segment, because those
+designs depend on the drawn change point. Those cases warn and fall back to
+PSIS-LOO, as do ARMA terms, observation weights and a varying `sigma`.
+
+mcp draws varying change points from a *truncated* normal and then re-centres
+them (`cp_1_id = cp_1_id_uncentered - mean(...)`), which couples the groups at
+O(1/G); see `analysis/probe_mcp_accessors.R`, which verifies the accessor
+alignment this extractor depends on.
 A fit with no random intercept falls back too — there is nothing to marginalise.
 
 ## References
